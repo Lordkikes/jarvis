@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Jarvis</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500&family=Inter:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/static/themes/paper/styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='30' fill='%231a1a18'/></svg>" />
+</head>
+<body data-state="idle" data-theme="paper">
+
+<header class="top">
+  <span class="wordmark" id="brand-name">Jarvis</span>
+  <div class="meta">
+    <span id="m-model">—</span>
+    <span id="m-voice">—</span>
+  </div>
+  <div class="top__actions" id="theme-slot"></div>
+</header>
+
+<main class="main">
+  <section class="hero">
+    <p class="hero__label" id="status-hint">Di «Hey Jarvis» para empezar</p>
+    <h1 class="hero__state" id="status-text">En reposo</h1>
+    <canvas id="wave" class="hero__wave" width="900" height="120" aria-hidden="true"></canvas>
+  </section>
+
+  <section class="transcript" id="log" aria-label="Conversación"></section>
+</main>
+
+<footer class="dock">
+  <button class="mic" id="btn-mic" title="Activar (espacio)">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg>
+    <span>Hablar</span>
+  </button>
+
+  <form class="field" id="form">
+    <input class="field__input" id="input" type="text" autocomplete="off"
+           placeholder="o escribe aquí…" aria-label="Mensaje para Jarvis" />
+  </form>
+
+  <div class="dock__actions">
+    <button class="link" id="btn-stop">Parar</button>
+    <button class="link" id="btn-mute" aria-pressed="false">Silenciar</button>
+    <button class="link" id="btn-clear">Limpiar</button>
+  </div>
+</footer>
+
+<script src="/static/shared/client.js"></script>
+<script src="/static/themes/paper/theme.js"></script>
+</body>
+</html>

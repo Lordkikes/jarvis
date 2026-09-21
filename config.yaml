@@ -1,0 +1,90 @@
+# ---------------------------------------------------------------------------
+# Configuración de Jarvis. Todos los valores pueden sobreescribirse con
+# variables de entorno usando el prefijo JARVIS_ (p. ej. JARVIS_LLM__MODEL).
+# ---------------------------------------------------------------------------
+
+assistant:
+  name: Jarvis
+  language: es
+  greeting: "Hola, soy Jarvis. Di 'Hey Jarvis' cuando me necesites."
+  # Personalidad / instrucciones del sistema para el modelo.
+  persona: |
+    Eres Jarvis, un asistente de voz personal. Hablas español neutro.
+    Tus respuestas se convierten en AUDIO, así que:
+    - Sé breve: 1 o 2 frases salvo que te pidan detalle.
+    - No uses markdown, listas con viñetas, emojis ni URLs largas.
+    - Escribe números y siglas como se pronuncian.
+    - Si necesitas un dato del mundo real (hora, clima, web), usa una herramienta.
+    - Si no sabes algo, dilo en una frase.
+
+audio:
+  input_device: null        # null = dispositivo por defecto; o índice/nombre
+  output_device: null
+  sample_rate: 16000
+  frame_ms: 30              # tamaño de frame para VAD (10, 20 o 30)
+  silence_ms: 900           # silencio que cierra la frase
+  min_speech_ms: 300        # ignora ruidos más cortos que esto
+  max_utterance_s: 20       # corte de seguridad
+  vad_aggressiveness: 2     # 0 (permisivo) .. 3 (estricto)
+
+wake:
+  provider: openwakeword    # openwakeword | porcupine | none
+  model: hey_jarvis         # openWakeWord: hey_jarvis, alexa... | porcupine: jarvis
+  threshold: 0.5
+  # Tras responder, Jarvis sigue escuchando N segundos sin wake word.
+  followup_seconds: 8
+
+aec:
+  # Cancelación de eco acústico: resta del micrófono lo que suena por los
+  # altavoces. Necesita  pip install webrtc-audio-processing  (ver README).
+  enabled: true
+  mode: full             # full (recomendado) | mobile (más ligero, menos eficaz)
+  suppression: 0         # 0..2; subir solo si aún se cuela eco: come tu voz
+  noise_suppression: 1   # 0..3, o -1 para desactivar el supresor de ruido
+  delay_ms: null         # null = medido de los propios dispositivos
+
+barge_in:
+  # Interrumpir a Jarvis hablando por encima.
+  enabled: true
+  mode: voice            # voice (tu voz le corta) | wakeword (di "Hey Jarvis") | off
+  threshold: 0.10        # nivel mínimo de voz para cortarle (0..1)
+  echo_gain: 1.4         # cuánto debe superar al eco de los altavoces (sube si se
+                         # corta solo al oírse; baja si te cuesta interrumpirle)
+  echo_gain_aec: 0.6     # el que se usa cuando la cancelación de eco está activa
+  frames: 5              # frames seguidos que lo confirman (~150 ms)
+  guard_ms: 350          # margen tras empezar a hablar, ignora la cola de tu frase
+  preroll_frames: 10     # audio previo que se conserva para no perder palabras
+
+stt:
+  provider: faster-whisper  # faster-whisper | groq | openai | none
+  model: small              # tiny | base | small | medium | large-v3
+  device: cpu               # cpu | cuda
+  compute_type: int8        # int8 | int8_float16 | float16
+  language: es
+
+llm:
+  provider: claude
+  model: claude-opus-5
+  effort: low               # low | medium | high | xhigh | max (latencia vs calidad)
+  max_tokens: 2048
+  memory_turns: 12          # turnos de conversación que se mantienen en contexto
+  web_search: true          # herramienta de búsqueda web del lado del servidor
+
+tools:
+  allow_system: true        # abrir apps/URLs y leer estado del equipo
+  notes_file: data/notes.json
+  memory_file: data/memory.json
+
+tts:
+  provider: piper           # piper | elevenlabs | system | none
+  voice: es_ES-davefx-medium
+  speed: 1.0
+  elevenlabs_voice_id: 21m00Tcm4TlvDq8ikWAM
+
+server:
+  # Interfaz: orb | hud | paper | terminal | wave
+  # Pruébalas en caliente con  http://127.0.0.1:8765/?theme=paper
+  theme: hud
+  host: 127.0.0.1
+  port: 8765
+  open_browser: true

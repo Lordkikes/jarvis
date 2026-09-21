@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>J.A.R.V.I.S.</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/static/themes/hud/styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='none' stroke='%2300e5ff' stroke-width='4'/><circle cx='50' cy='50' r='20' fill='none' stroke='%2300e5ff' stroke-width='8'/></svg>" />
+</head>
+<body data-state="idle" data-theme="hud">
+
+<div class="grid" aria-hidden="true"></div>
+<div class="frame" aria-hidden="true">
+  <span class="frame__corner frame__corner--tl"></span>
+  <span class="frame__corner frame__corner--tr"></span>
+  <span class="frame__corner frame__corner--bl"></span>
+  <span class="frame__corner frame__corner--br"></span>
+</div>
+
+<header class="head">
+  <h1 class="head__title" id="brand-name">J.A.R.V.I.S.</h1>
+  <div class="head__meta">
+    <span id="clock">--:--:--</span>
+    <span class="sep">/</span>
+    <span id="head-state">INICIANDO</span>
+  </div>
+  <div class="head__actions" id="theme-slot"></div>
+</header>
+
+<main class="layout">
+  <!-- Columna izquierda: telemetría -->
+  <aside class="panel panel--left">
+    <h2 class="panel__title">SISTEMA</h2>
+    <dl class="telemetry">
+      <div class="telemetry__row"><dt>MODELO</dt><dd id="t-model">—</dd></div>
+      <div class="telemetry__row"><dt>OÍDO</dt><dd id="t-stt">—</dd></div>
+      <div class="telemetry__row"><dt>VOZ</dt><dd id="t-tts">—</dd></div>
+      <div class="telemetry__row"><dt>DESPERTAR</dt><dd id="t-wake">—</dd></div>
+      <div class="telemetry__row"><dt>CORTE</dt><dd id="t-barge">—</dd></div>
+      <div class="telemetry__row"><dt>ECO</dt><dd id="t-aec">—</dd></div>
+    </dl>
+
+    <h2 class="panel__title">SEÑAL</h2>
+    <div class="meter"><span class="meter__fill" id="meter"></span></div>
+    <p class="panel__note" id="t-level">0%</p>
+
+    <h2 class="panel__title">CONTROL</h2>
+    <div class="controls">
+      <button class="hud-btn" id="btn-mic">ACTIVAR <kbd>espacio</kbd></button>
+      <button class="hud-btn" id="btn-stop">CORTAR <kbd>esc</kbd></button>
+      <button class="hud-btn" id="btn-mute" aria-pressed="false">MICRO <kbd>m</kbd></button>
+      <button class="hud-btn" id="btn-clear">BORRAR</button>
+    </div>
+  </aside>
+
+  <!-- Centro: reactor -->
+  <section class="reactor">
+    <canvas id="reactor" width="640" height="640" aria-hidden="true"></canvas>
+    <p class="reactor__state" id="status-text">EN REPOSO</p>
+    <p class="reactor__hint" id="status-hint">DI «HEY JARVIS»</p>
+  </section>
+
+  <!-- Columna derecha: registro -->
+  <aside class="panel panel--right">
+    <h2 class="panel__title">REGISTRO <span id="log-count">0</span></h2>
+    <div class="feed" id="log"></div>
+  </aside>
+</main>
+
+<footer class="console">
+  <span class="console__prompt">&gt;</span>
+  <form id="form" class="console__form">
+    <input id="input" class="console__input" type="text" autocomplete="off"
+           placeholder="ESCRIBE UNA ORDEN" aria-label="Orden para Jarvis" />
+  </form>
+  <span class="console__cursor" aria-hidden="true"></span>
+</footer>
+
+<script src="/static/shared/client.js"></script>
+<script src="/static/themes/hud/theme.js"></script>
+</body>
+</html>
