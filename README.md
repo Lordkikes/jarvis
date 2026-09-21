@@ -297,19 +297,19 @@ selector que llevan todas en la esquina.
 
 | Tema | Cómo es | Para quién |
 |---|---|---|
+| `hud` **(por defecto)** | Reactor de arcos, telemetría y rejilla, todo monoespaciado | La fantasía de la película |
 | `orb` | Orbe reactivo sobre fondo oscuro con aurora | El término medio: bonito y legible |
-| `hud` | Reactor de arcos, telemetría y rejilla, todo monoespaciado | La fantasía de la película |
 | `paper` | Claro, tipográfico, una sola línea de onda | Escritorio tranquilo, uso diario |
 | `terminal` | Fósforo verde, líneas de barrido, todo texto | Si vives en la consola |
 | `wave` | Burbujas de chat y barras de voz, claro u oscuro según el sistema | Si lo quieres como una app de mensajería |
 
 ```bash
-http://127.0.0.1:8765/?theme=hud     # probar una
+http://127.0.0.1:8765/?theme=paper   # probar otra sin tocar nada
 ```
 
 ```yaml
 server:
-  theme: hud        # dejarla fija en config.yaml
+  theme: hud        # la que arranca por defecto
 ```
 
 Todas hablan con el mismo servidor y muestran lo mismo (estado, transcripción

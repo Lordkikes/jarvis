@@ -83,8 +83,8 @@ tts:
 
 server:
   # Interfaz: orb | hud | paper | terminal | wave
-  # Pruébalas en caliente con  http://127.0.0.1:8765/?theme=hud
-  theme: orb
+  # Pruébalas en caliente con  http://127.0.0.1:8765/?theme=paper
+  theme: hud
   host: 127.0.0.1
   port: 8765
   open_browser: true

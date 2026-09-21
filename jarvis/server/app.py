@@ -17,7 +17,7 @@ from ..pipeline import Jarvis
 log = logging.getLogger("jarvis.server")
 STATIC = Path(__file__).parent / "static"
 THEMES_DIR = STATIC / "themes"
-DEFAULT_THEME = "orb"
+DEFAULT_THEME = "hud"
 
 
 def available_themes() -> list[str]:
