@@ -92,6 +92,30 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"  {WARN} no se pueden listar dispositivos ({exc})")
 
+    print("\nFuentes indexadas")
+    try:
+        from jarvis.config import load_config
+        from jarvis.sources.store import Store
+
+        cfg = load_config()
+        db = Path(cfg.get("sources.database", "data/index.db"))
+        if not db.is_absolute():
+            db = Path(__file__).resolve().parent.parent / db
+        if db.exists():
+            counts = Store(db).counts()
+            for source, total in sorted(counts.items()) or []:
+                print(f"  {OK} {source}: {total} elementos")
+            if not counts:
+                print(f"  {WARN} el índice está vacío; aún no se ha sincronizado")
+        else:
+            print(f"  {WARN} sin índice todavía (se crea al arrancar Jarvis)")
+        if not cfg.get("sources.email.enabled", False):
+            print(f"  {WARN} correo desactivado (sources.email.enabled en config.yaml)")
+        elif not os.getenv("JARVIS_EMAIL_PASSWORD"):
+            print(f"  {BAD} correo activado pero falta JARVIS_EMAIL_PASSWORD")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  {WARN} no se pudo leer el índice ({exc})")
+
     print("\nConfiguración")
     try:
         from jarvis.config import load_config

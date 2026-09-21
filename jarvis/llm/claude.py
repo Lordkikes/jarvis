@@ -72,6 +72,7 @@ class Brain:
     async def respond(self, user_text: str, on_delta=None, on_sentence=None,
                       on_tool=None) -> str:
         """Procesa un turno completo. Devuelve el texto final ya dicho."""
+        self.toolbox.begin_turn()
         self.messages.append({"role": "user", "content": user_text})
         self._trim()
 
