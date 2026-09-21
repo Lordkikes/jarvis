@@ -33,15 +33,18 @@ class AudioCapture:
         frame_ms: int = 30,
         device: Any = None,
         on_level=None,
+        aec=None,
     ):
         self.loop = loop
         self.sample_rate = sample_rate
         self.frame_size = int(sample_rate * frame_ms / 1000)
         self.device = device
         self.on_level = on_level
+        self.aec = aec
         self.queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=100)
         self._stream = None
         self._muted = False
+        self.latency_ms = 0
 
     # -- ciclo de vida -----------------------------------------------------
     def start(self) -> None:
@@ -62,6 +65,10 @@ class AudioCapture:
             self._stream.start()
         except Exception as exc:  # noqa: BLE001
             raise AudioUnavailable(f"no se pudo abrir el micrófono: {exc}") from exc
+
+        self.latency_ms = int(float(getattr(self._stream, "latency", 0) or 0) * 1000)
+        if self.aec is not None:
+            self.aec.set_latencies(input_ms=self.latency_ms)
         log.info("micrófono abierto (%d Hz, frames de %d muestras)",
                  self.sample_rate, self.frame_size)
 
@@ -84,6 +91,10 @@ class AudioCapture:
         self.loop.call_soon_threadsafe(self._dispatch, frame)
 
     def _dispatch(self, frame: bytes) -> None:
+        if self.aec is not None:
+            # A partir de aquí nadie vuelve a oír el eco de Jarvis: ni el VAD,
+            # ni la wake word, ni el barge-in, ni la transcripción.
+            frame = self.aec.process(frame)
         if self.on_level is not None:
             self.on_level(_rms(frame))
         try:

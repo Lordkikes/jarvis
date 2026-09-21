@@ -6,3 +6,5 @@ webrtcvad>=2.0.10
 openwakeword>=0.6.0
 faster-whisper>=1.0.0
 piper-tts>=1.2.0
+
+# La cancelación de eco va aparte (se compila):  pip install -r requirements-aec.txt

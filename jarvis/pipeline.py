@@ -7,6 +7,7 @@ import logging
 import time
 
 from .audio import AudioUnavailable
+from .audio.aec import make_echo_canceller
 from .audio.bargein import make_barge_in
 from .audio.capture import AudioCapture
 from .audio.player import AudioPlayer, pcm_to_wav
@@ -41,9 +42,13 @@ class Jarvis:
         self.brain = Brain(cfg, self.toolbox)
         self.stt = make_stt(cfg)
         self.tts = make_tts(cfg)
-        self.player = AudioPlayer(device=cfg.get("audio.output_device"))
+        self.aec = make_echo_canceller(cfg)
+        self.player = AudioPlayer(device=cfg.get("audio.output_device"), aec=self.aec)
         self.wakeword = make_wakeword(cfg)
         self.barge_in = make_barge_in(cfg)
+        if self.aec is not None:
+            # Sin eco en el micrófono, interrumpir ya no exige levantar la voz.
+            self.barge_in.echo_gain = float(cfg.get("barge_in.echo_gain_aec", 0.6))
         self._turn_task: asyncio.Task | None = None
         self.capture: AudioCapture | None = None
 
@@ -57,6 +62,7 @@ class Jarvis:
                 frame_ms=int(self.cfg.get("audio.frame_ms", 30)),
                 device=self.cfg.get("audio.input_device"),
                 on_level=self._emit_level,
+                aec=self.aec,
             )
             self.capture.start()
             self.voice_mode = True
@@ -73,7 +79,8 @@ class Jarvis:
         self.bus.emit("ready", voice=self.voice_mode,
                       stt=type(self.stt).__name__, tts=type(self.tts).__name__,
                       wake=getattr(self.wakeword, "name", "none"),
-                      barge_in=self.barge_in.mode, model=self.brain.model)
+                      barge_in=self.barge_in.mode, aec=self.aec_mode,
+                      model=self.brain.model)
 
     def _emit_level(self, level: float) -> None:
         """Envía el nivel a la interfaz ~11 veces por segundo, no en cada frame."""
@@ -94,6 +101,10 @@ class Jarvis:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task
+
+    @property
+    def aec_mode(self) -> str:
+        return self.aec.mode if self.aec is not None else "off"
 
     # -- estado ------------------------------------------------------------
     def _set_state(self, state: str, **extra) -> None:

@@ -1,0 +1,8 @@
+# --- Cancelación de eco acústico (opcional pero recomendada) ---
+# Se compila al instalar: necesita swig y un compilador de C++.
+#   Ubuntu/Debian: sudo apt install swig build-essential python3-dev
+#   macOS:         brew install swig
+#   Windows:       instala swig y las Build Tools de Visual Studio
+# Va en su propio fichero porque, si la compilación falla, el resto de Jarvis
+# debe poder instalarse igual (sin AEC funciona, solo cuesta más interrumpirle).
+webrtc-audio-processing>=0.1.3

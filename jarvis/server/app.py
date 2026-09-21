@@ -47,6 +47,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
             "tts": getattr(jarvis.tts, "name", "none"),
             "wake": getattr(jarvis.wakeword, "name", "none"),
             "barge_in": jarvis.barge_in.mode,
+            "aec": jarvis.aec_mode,
         }
 
     @app.websocket("/ws")
@@ -63,6 +64,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
             "stt": getattr(jarvis.stt, "name", "none"),
             "tts": getattr(jarvis.tts, "name", "none"),
             "barge_in": jarvis.barge_in.mode,
+            "aec": jarvis.aec_mode,
         })
         await socket.send_json(bus.last_state)
 

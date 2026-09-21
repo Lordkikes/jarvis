@@ -34,6 +34,15 @@ wake:
   # Tras responder, Jarvis sigue escuchando N segundos sin wake word.
   followup_seconds: 8
 
+aec:
+  # Cancelación de eco acústico: resta del micrófono lo que suena por los
+  # altavoces. Necesita  pip install webrtc-audio-processing  (ver README).
+  enabled: true
+  mode: full             # full (recomendado) | mobile (más ligero, menos eficaz)
+  suppression: 0         # 0..2; subir solo si aún se cuela eco: come tu voz
+  noise_suppression: 1   # 0..3, o -1 para desactivar el supresor de ruido
+  delay_ms: null         # null = medido de los propios dispositivos
+
 barge_in:
   # Interrumpir a Jarvis hablando por encima.
   enabled: true
@@ -41,6 +50,7 @@ barge_in:
   threshold: 0.10        # nivel mínimo de voz para cortarle (0..1)
   echo_gain: 1.4         # cuánto debe superar al eco de los altavoces (sube si se
                          # corta solo al oírse; baja si te cuesta interrumpirle)
+  echo_gain_aec: 0.6     # el que se usa cuando la cancelación de eco está activa
   frames: 5              # frames seguidos que lo confirman (~150 ms)
   guard_ms: 350          # margen tras empezar a hablar, ignora la cola de tu frase
   preroll_frames: 10     # audio previo que se conserva para no perder palabras

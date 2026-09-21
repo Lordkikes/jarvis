@@ -72,7 +72,8 @@
         $("chip-stt").textContent = "oído: " + short(event.stt);
         $("chip-tts").textContent = "voz: " + short(event.tts);
         $("chip-wake").textContent = event.voice ? "wake: " + short(event.wake) : "sin micro";
-        $("chip-barge").textContent = "corte: " + short(event.barge_in);
+        $("chip-barge").textContent = "corte: " + short(event.barge_in)
+          + (event.aec && event.aec !== "off" ? " + aec" : "");
         if (event.greeting) addMessage("system", event.greeting);
         if (!event.voice) {
           addMessage("system", "No hay micrófono disponible: usa el cuadro de texto.");

@@ -27,8 +27,9 @@ def pcm_to_wav(pcm: bytes, sample_rate: int, channels: int = 1) -> bytes:
 class AudioPlayer:
     """Reproduce por los altavoces del equipo; si no hay salida, avisa al llamador."""
 
-    def __init__(self, device: Any = None):
+    def __init__(self, device: Any = None, aec=None):
         self.device = device
+        self.aec = aec
         self._stop = threading.Event()
         self.available = True
         # Nivel del trozo que suena ahora mismo: lo usa el detector de barge-in
@@ -39,6 +40,8 @@ class AudioPlayer:
         """Corta la reproducción en curso (el usuario volvió a hablar)."""
         self._stop.set()
         self.level = 0.0
+        if self.aec is not None:
+            self.aec.clear_reference()
 
     async def play(self, pcm: bytes, sample_rate: int) -> bool:
         """Devuelve True si sonó localmente, False si no hay salida de audio."""
@@ -58,17 +61,26 @@ class AudioPlayer:
             self.available = False
             return False
 
-        chunk = sample_rate // 10 * 2  # bloques de 100 ms
+        # Bloques de 100 ms exactos: así el remuestreo de la referencia para
+        # el cancelador de eco cae siempre en un número entero de frames.
+        chunk = sample_rate // 10 * 2
         try:
             with sd.RawOutputStream(
                 samplerate=sample_rate, channels=1, dtype="int16", device=self.device
             ) as stream:
+                if self.aec is not None:
+                    self.aec.set_latencies(
+                        output_ms=float(getattr(stream, "latency", 0) or 0) * 1000)
                 for offset in range(0, len(pcm), chunk):
                     if self._stop.is_set():
                         log.info("reproducción interrumpida")
                         break
                     block = pcm[offset:offset + chunk]
                     self.level = _rms(block)
+                    if self.aec is not None:
+                        # La referencia va por delante de lo que suena: el
+                        # búfer de salida es justo el retardo que declaramos.
+                        self.aec.reference(block, sample_rate)
                     stream.write(block)
         except Exception as exc:  # noqa: BLE001
             log.warning("fallo al reproducir (%s); se usará el navegador", exc)
@@ -76,4 +88,6 @@ class AudioPlayer:
             return False
         finally:
             self.level = 0.0
+            if self.aec is not None:
+                self.aec.clear_reference()
         return True

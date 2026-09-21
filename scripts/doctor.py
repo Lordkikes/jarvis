@@ -16,6 +16,7 @@ OK, WARN, BAD = "\033[92m✓\033[0m", "\033[93m!\033[0m", "\033[91m✗\033[0m"
 
 CORE = ["fastapi", "uvicorn", "yaml", "anthropic"]
 VOICE = ["sounddevice", "numpy", "webrtcvad", "openwakeword", "faster_whisper", "piper"]
+AEC = "webrtc_audio_processing"
 KEYS = [("ANTHROPIC_API_KEY", True), ("ELEVENLABS_API_KEY", False),
         ("GROQ_API_KEY", False), ("PICOVOICE_ACCESS_KEY", False)]
 
@@ -50,6 +51,19 @@ def main() -> int:
         ok = check_module(module)
         print(f"  {OK if ok else WARN} {module}")
 
+    print("\nCancelación de eco (opcional)")
+    if check_module(AEC):
+        print(f"  {OK} {AEC}")
+    else:
+        import shutil
+
+        print(f"  {WARN} {AEC} no instalado: se podrá interrumpir a Jarvis, pero "
+              "habrá que subir barge_in.echo_gain")
+        tool = "swig" if shutil.which("swig") else None
+        print(f"  {OK if tool else WARN} swig "
+              f"{'disponible' if tool else 'no encontrado (hace falta para compilarlo)'}")
+        print("    instálalo con:  pip install -r requirements-aec.txt")
+
     print("\nClaves de API")
     for key, required in KEYS:
         value = os.getenv(key)
@@ -83,7 +97,8 @@ def main() -> int:
         from jarvis.config import load_config
 
         cfg = load_config()
-        for path in ("llm.model", "stt.provider", "tts.provider", "wake.provider"):
+        for path in ("llm.model", "stt.provider", "tts.provider", "wake.provider",
+                     "barge_in.mode", "aec.enabled"):
             print(f"  {OK} {path} = {cfg.get(path)}")
     except Exception as exc:  # noqa: BLE001
         problems += 1

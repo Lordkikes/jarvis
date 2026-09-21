@@ -41,6 +41,7 @@ tocar código, y si una falta, Jarvis sigue funcionando en modo degradado
 |---|---|---|---|
 | **Wake word** | [openWakeWord](https://github.com/dscripka/openWakeWord) — trae el modelo `hey_jarvis` | Picovoice Porcupine (más preciso, clave gratuita) | 0 € |
 | **Detección de fin de frase** | [webrtcvad](https://github.com/wiseman/py-webrtcvad) | detección por energía (incluida) | 0 € |
+| **Cancelación de eco** | [webrtc-audio-processing](https://github.com/xiongyihui/python-webrtc-audio-processing) | ninguna (solo umbral por energía) | 0 € |
 | **Transcripción (STT)** | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) local | Groq Whisper, OpenAI | 0 € local |
 | **Cerebro (LLM)** | **Claude Opus 5** vía API de Anthropic | Sonnet 5 (más barato y rápido) | ~5 $/M tokens entrada |
 | **Voz (TTS)** | [Piper](https://github.com/rhasspy/piper) local, voces en español | ElevenLabs (más natural, de pago), voz del sistema | 0 € local |
@@ -70,22 +71,31 @@ Son las que necesita el micrófono (PortAudio) y la voz de respaldo.
 
 ```bash
 # Ubuntu / Debian / Raspberry Pi OS
-sudo apt install portaudio19-dev python3-dev libsndfile1 espeak-ng
+sudo apt install portaudio19-dev python3-dev libsndfile1 espeak-ng \
+                 swig build-essential
 
 # macOS
-brew install portaudio
+brew install portaudio swig
 
-# Windows: no hace falta nada, sounddevice trae PortAudio incluido
+# Windows: sounddevice trae PortAudio incluido. Para la cancelación de eco
+# hacen falta swig y las Build Tools de Visual Studio.
 ```
+
+`swig` y el compilador solo son necesarios para la cancelación de eco, que se
+compila al instalarse. Sin ella Jarvis funciona igual (ver *barge-in*).
 
 ### Paso 3 — Entorno virtual y dependencias
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -r requirements.txt      # núcleo: servidor + Claude
+pip install -r requirements.txt       # núcleo: servidor + Claude
 pip install -r requirements-voice.txt # voz: micrófono, Whisper, Piper
+pip install -r requirements-aec.txt   # cancelación de eco (se compila)
 ```
+
+El AEC va en su propio fichero a propósito: si la compilación falla en tu
+sistema, el resto de Jarvis se instala igual.
 
 > En Linux/macOS puedes hacer los pasos 2 y 3 de una vez con `./scripts/setup.sh`.
 
@@ -142,42 +152,74 @@ descarta lo que le quedaba por decir y se pone a escucharte. Lo que ya había
 dicho queda en el contexto marcado como interrumpido, así que «no, mejor en
 inglés» se entiende sin repetir nada.
 
-El problema difícil aquí es el **eco**: el micrófono también oye a Jarvis. La
-solución que usa este proyecto es comparar el nivel del micro con el del audio
-que está sonando en ese mismo instante (`AudioPlayer.level`): tu voz tiene que
-superar al eco por un margen (`echo_gain`) durante varios frames seguidos
-(`frames`), y el VAD tiene que confirmar que es voz y no un portazo. Los frames
-inmediatamente anteriores se conservan (`preroll_frames`) y se usan como
-principio de tu nueva frase, para que no se pierdan las primeras sílabas.
+El problema difícil aquí es el **eco**: el micrófono también oye a Jarvis. Se
+ataca en dos capas.
+
+**Capa 1 — cancelación de eco (AEC).** El módulo de audio de WebRTC recibe las
+dos señales: la *referencia* (lo que el reproductor está mandando a los
+altavoces) y la del micrófono. Estima el camino acústico de la sala y resta el
+eco. Todo lo que viene después —VAD, wake word, barge-in y la propia
+transcripción— trabaja ya sobre audio limpio. En la simulación de las pruebas
+(`tests/test_aec.py`) el eco residual baja del orden de **30 dB** y la
+diferencia entre tu voz y lo que queda del eco se multiplica por **siete**. Por
+eso, cuando el AEC está activo, el umbral de interrupción baja solo
+(`barge_in.echo_gain_aec`, 0.6 en vez de 1.4): puedes cortarle hablando normal.
+
+**Capa 2 — el umbral por energía**, que sigue ahí como red de seguridad y es lo
+único que queda si no instalas el AEC: tu voz tiene que superar al nivel del
+audio que suena en ese instante (`AudioPlayer.level`) por un margen
+(`echo_gain`) durante varios frames seguidos (`frames`), y el VAD tiene que
+confirmar que es voz y no un portazo. Los frames inmediatamente anteriores se
+conservan (`preroll_frames`) y se usan como principio de tu nueva frase, para
+que no se pierdan las primeras sílabas.
 
 ```yaml
+aec:
+  enabled: true
+  mode: full           # full (recomendado) | mobile (más ligero, menos eficaz)
+  suppression: 0       # 0..2; subirlo se come tu voz cuando hablas encima
+  noise_suppression: 1 # 0..3, o -1 para desactivarlo
+  delay_ms: null       # null = medido de los propios dispositivos
+
 barge_in:
   enabled: true
-  mode: voice        # voice | wakeword | off
-  threshold: 0.10    # nivel mínimo de voz para cortarle
-  echo_gain: 1.4     # cuánto debe superar al eco de los altavoces
-  frames: 5          # frames seguidos que lo confirman (~150 ms)
-  guard_ms: 350      # margen tras empezar a responder
-  preroll_frames: 10 # audio previo que se conserva
+  mode: voice          # voice | wakeword | off
+  threshold: 0.10      # nivel mínimo de voz para cortarle
+  echo_gain: 1.4       # margen sobre el eco cuando NO hay AEC
+  echo_gain_aec: 0.6   # margen cuando el AEC está activo
+  frames: 5            # frames seguidos que lo confirman (~150 ms)
+  guard_ms: 350        # margen tras empezar a responder
+  preroll_frames: 10   # audio previo que se conserva
 ```
+
+Sobre `aec.suppression`: es la supresión *adicional* posterior al filtro. El
+que cancela de verdad es el filtro adaptativo; subir este número apenas mejora
+el eco residual (15 frente a 18 de RMS en la simulación) y en cambio atenúa tu
+voz durante el double-talk a menos de la mitad (1169 → 533). Súbelo solo si de
+verdad se cuela eco.
+
+El retardo importa: el AEC necesita saber cuánto tarda el sonido en salir por
+el altavoz y volver por el micro. Se mide de la latencia que declaran los
+propios dispositivos; si tu equipo miente (típico en Bluetooth), fíjalo a mano
+con `aec.delay_ms`.
 
 | Si te pasa esto | Ajusta |
 |---|---|
-| Se corta solo al oírse a sí mismo | Sube `echo_gain` a 1.8–2.5 y `threshold` a 0.15 |
-| Cuesta interrumpirle, hay que gritar | Baja `echo_gain` a 1.1 y `threshold` a 0.07 |
+| Se corta solo al oírse a sí mismo | Comprueba primero que el AEC está activo (`scripts/doctor.py`); luego sube `echo_gain`/`echo_gain_aec` y `threshold` a 0.15 |
+| Se cuela eco aunque el AEC esté activo | Prueba `aec.delay_ms: 120` (o mide el tuyo) y sube `aec.suppression` a 1 |
+| Cuesta interrumpirle, hay que gritar | Baja `echo_gain_aec` a 0.4 y `threshold` a 0.07 |
 | Le corta el ruido de fondo | Sube `frames` a 8 y `audio.vad_aggressiveness` a 3 |
 | Pierde tus primeras palabras | Sube `preroll_frames` a 15 |
 | Con altavoces es imposible afinarlo | `mode: wakeword`: solo le corta oír «Hey Jarvis» |
 
-Un caso en el que el truco del eco no puede ayudar: cuando el servidor no tiene
-altavoces y la voz se reproduce **en el navegador**, el detector no sabe a qué
-volumen está sonando. Ahí usa auriculares o `mode: wakeword`.
+Un caso en el que ninguna de las dos capas puede ayudar: cuando el servidor no
+tiene altavoces y la voz se reproduce **en el navegador**. Ahí no hay señal de
+referencia que restar ni nivel que comparar, porque el audio suena en otro
+proceso. Usa auriculares o `mode: wakeword`.
 
-**Con auriculares funciona sin tocar nada.** Con altavoces a volumen alto, el
-método por energía tiene sus límites: no hay cancelación de eco acústico (AEC)
-en el proyecto. Si tu sistema la ofrece, úsala en la entrada del micrófono
-(PulseAudio: `module-echo-cancel`; macOS y Windows la aplican en algunos
-dispositivos), o pásate a `mode: wakeword`, que es inmune al problema.
+**Con auriculares funciona sin tocar nada.** Con altavoces, el AEC es lo que
+hace la diferencia; si no lo tienes instalado y el volumen es alto, `mode:
+wakeword` es el plan B infalible: solo le corta oír «Hey Jarvis».
 
 ### Lo que ya sabe hacer
 
@@ -206,6 +248,8 @@ jarvis/
 │   │   ├── capture.py      # micrófono -> frames
 │   │   ├── vad.py          # ¿ha terminado de hablar?
 │   │   ├── bargein.py      # ★ ¿me está interrumpiendo?
+│   │   ├── aec.py          # ★ cancelación de eco (WebRTC)
+│   │   ├── resample.py     # alinea la referencia con el micrófono
 │   │   ├── wakeword.py     # "Hey Jarvis"
 │   │   └── player.py       # altavoces (con interrupción)
 │   ├── stt/                # whisper_local.py | cloud.py
@@ -233,6 +277,9 @@ Los tres ficheros marcados con ★ son el 80 % de la lógica.
   importa en una conversación hablada. Súbelo a `high` para tareas complejas.
 - **Barge-in**: mientras Jarvis habla, el micrófono sigue analizándose, pero
   solo para decidir si le estás interrumpiendo (`jarvis/audio/bargein.py`).
+- **Audio limpio en un solo punto**: la cancelación de eco se aplica en
+  `AudioCapture._dispatch`, así que el resto del sistema no sabe que existe y
+  todo —wake word, VAD, barge-in y Whisper— se beneficia.
 - **Cancelación limpia del turno**: al interrumpir se corta el audio, se
   descartan las frases pendientes y se cancela la petición al modelo; el
   cerebro cierra el turno abierto para que el historial siga siendo válido.
@@ -326,7 +373,9 @@ audio:
 | Tarda mucho en responder | `stt.model: base`, `llm.model: claude-sonnet-5`, `llm.effort: low` |
 | `invalid x-api-key` | La clave de `.env` no es válida o no se cargó: revísala con `doctor.py` |
 | Se oye a sí mismo | Usa auriculares, o baja el volumen: el eco puede disparar el wake word |
-| Se interrumpe solo constantemente | Sube `barge_in.echo_gain`, o `barge_in.mode: wakeword` (ver *barge-in*) |
+| Se interrumpe solo constantemente | Activa el AEC, sube `barge_in.echo_gain_aec`, o `barge_in.mode: wakeword` |
+| `swig: command not found` al instalar | Es el AEC: instala `swig` y `build-essential`, o sáltate `requirements-aec.txt` |
+| El AEC no cancela nada | El retardo declarado por tus dispositivos es falso: fija `aec.delay_ms` (empieza por 120) |
 | La voz suena en el navegador, no en los altavoces | No hay salida de audio local; es el respaldo automático. Revisa `audio.output_device` |
 
 ---
@@ -350,18 +399,17 @@ La caché del prompt reduce bastante la entrada en conversaciones largas.
 
 Ideas para seguir construyendo, más o menos por dificultad:
 
-1. **Cancelación de eco (AEC)** con `webrtc-audio-processing` o `speexdsp`, para
-   que el barge-in sea infalible con altavoces a volumen alto.
-2. **Más herramientas**: domótica, calendario, correo, control de música.
-3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
-4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.
-5. **Acceso desde el móvil**: exponer el servidor en la red local (`server.host: 0.0.0.0`) — hazlo solo en redes de confianza, no hay autenticación.
+1. **Más herramientas**: domótica, calendario, correo, control de música.
+2. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
+3. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.
+4. **Acceso desde el móvil**: exponer el servidor en la red local (`server.host: 0.0.0.0`) — hazlo solo en redes de confianza, no hay autenticación.
 
 ---
 
 ## 10. Nota sobre privacidad
 
-- El audio nunca sale del equipo si usas `faster-whisper` + `piper`.
+- El audio nunca sale del equipo si usas `faster-whisper` + `piper`. La
+  cancelación de eco también es local: es una librería de C++, no un servicio.
 - Lo que sí viaja a la API de Anthropic es el **texto** de la conversación.
 - Las notas y la memoria se guardan en texto plano en `data/`.
 - `tools.allow_system: false` desactiva abrir aplicaciones y leer el estado del equipo.

@@ -50,12 +50,16 @@ class FakeCapture:
         pass
 
 
-def make_jarvis(tmp: str, **barge_in) -> tuple[Jarvis, EventBus]:
+def make_jarvis(tmp: str, aec: bool = False, **barge_in) -> tuple[Jarvis, EventBus]:
     options = {"enabled": True, "mode": "voice", "threshold": 0.10,
-               "echo_gain": 1.4, "frames": 3, "guard_ms": 0, "preroll_frames": 5}
+               "echo_gain": 1.4, "echo_gain_aec": 0.6, "frames": 3,
+               "guard_ms": 0, "preroll_frames": 5}
     options.update(barge_in)
     cfg = Config({
         "audio": {"sample_rate": SAMPLE_RATE, "frame_ms": FRAME_MS},
+        # Los frames de prueba entran ya "limpios": la cancelación de eco se
+        # prueba aparte, aquí lo que se mide es la decisión del detector.
+        "aec": {"enabled": aec},
         "barge_in": options,
         "wake": {"provider": "none", "followup_seconds": 0},
         "stt": {"provider": "none"},
@@ -129,6 +133,20 @@ class TestBargeInPipeline(unittest.IsolatedAsyncioTestCase):
         await self.drive(jarvis, tone(), cycles=60)
 
         self.assertEqual(jarvis.state, SPEAKING)
+
+    async def test_echo_cancellation_relaxes_the_threshold(self):
+        """Con el eco cancelado, interrumpir no debería exigir levantar la voz."""
+        jarvis, _ = make_jarvis(self.tmp.name, aec=True)
+        if jarvis.aec is None:
+            self.skipTest("webrtc-audio-processing no está instalado")
+        self.assertEqual(jarvis.barge_in.echo_gain, 0.6)
+        self.assertEqual(jarvis.aec_mode, "full")
+
+    async def test_without_echo_cancellation_the_threshold_is_strict(self):
+        jarvis, _ = make_jarvis(self.tmp.name, aec=False)
+        self.assertIsNone(jarvis.aec)
+        self.assertEqual(jarvis.barge_in.echo_gain, 1.4)
+        self.assertEqual(jarvis.aec_mode, "off")
 
     async def test_manual_interrupt_stops_the_turn(self):
         jarvis, bus = make_jarvis(self.tmp.name)
