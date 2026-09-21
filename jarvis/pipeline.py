@@ -7,6 +7,7 @@ import logging
 import time
 
 from .audio import AudioUnavailable
+from .audio.bargein import make_barge_in
 from .audio.capture import AudioCapture
 from .audio.player import AudioPlayer, pcm_to_wav
 from .audio.vad import Utterance
@@ -32,6 +33,7 @@ class Jarvis:
         self._tasks: set[asyncio.Task] = set()
         self._speech_queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._activate_event = asyncio.Event()
+        self._speech_epoch = 0
         self._followup_until = 0.0
         self._busy = asyncio.Lock()
 
@@ -41,6 +43,8 @@ class Jarvis:
         self.tts = make_tts(cfg)
         self.player = AudioPlayer(device=cfg.get("audio.output_device"))
         self.wakeword = make_wakeword(cfg)
+        self.barge_in = make_barge_in(cfg)
+        self._turn_task: asyncio.Task | None = None
         self.capture: AudioCapture | None = None
 
     # -- ciclo de vida -----------------------------------------------------
@@ -61,11 +65,15 @@ class Jarvis:
             log.warning("modo solo texto: %s", exc)
             self.bus.emit("log", level="warning",
                           message="Sin micrófono: usa el cuadro de texto o el botón.")
+        if (self.barge_in.mode == "wakeword"
+                and getattr(self.wakeword, "name", "none") == "none"):
+            log.warning("barge_in.mode='wakeword' pero no hay detector de wake word; "
+                        "usa mode='voice' o configura wake.provider")
         self._set_state(IDLE)
         self.bus.emit("ready", voice=self.voice_mode,
                       stt=type(self.stt).__name__, tts=type(self.tts).__name__,
                       wake=getattr(self.wakeword, "name", "none"),
-                      model=self.brain.model)
+                      barge_in=self.barge_in.mode, model=self.brain.model)
 
     def _emit_level(self, level: float) -> None:
         """Envía el nivel a la interfaz ~11 veces por segundo, no en cada frame."""
@@ -89,7 +97,12 @@ class Jarvis:
 
     # -- estado ------------------------------------------------------------
     def _set_state(self, state: str, **extra) -> None:
-        self.state = state
+        previous, self.state = self.state, state
+        if state in (THINKING, SPEAKING):
+            if previous not in (THINKING, SPEAKING):
+                self.barge_in.arm()
+        elif previous in (THINKING, SPEAKING):
+            self.barge_in.reset()
         self.bus.emit("state", state=state, **extra)
 
     # -- entrada de audio --------------------------------------------------
@@ -111,8 +124,28 @@ class Jarvis:
         while True:
             frame = await self.capture.read()
 
-            if self.state in (THINKING, SPEAKING) or self.muted:
-                continue  # evitamos que Jarvis se escuche a sí mismo
+            if self.muted:
+                continue
+
+            if self.state in (THINKING, SPEAKING):
+                # Jarvis está respondiendo: solo nos interesa saber si el
+                # usuario ha empezado a hablar por encima.
+                if not self.barge_in.enabled:
+                    continue
+                wake_hit = (self.barge_in.mode == "wakeword"
+                            and self.wakeword.detect(frame))
+                prefix = self.barge_in.feed(
+                    frame, playback_level=self.player.level, wake_hit=wake_hit)
+                if prefix is None:
+                    continue
+                self._cut_off()
+                utterance.reset()
+                for buffered in prefix:
+                    utterance.push(buffered)
+                capturing = True
+                self._followup_until = 0.0
+                self._set_state(LISTENING)
+                continue
 
             if not capturing:
                 manual = self._activate_event.is_set()
@@ -143,6 +176,7 @@ class Jarvis:
                 self._spawn(self._process_utterance(audio))
 
     async def _process_utterance(self, pcm: bytes) -> None:
+        self._turn_task = asyncio.current_task()
         self._set_state(THINKING)
         sample_rate = int(self.cfg.get("audio.sample_rate", 16000))
         text = await self.stt.transcribe(pcm, sample_rate)
@@ -159,6 +193,7 @@ class Jarvis:
         if self._busy.locked():
             self.bus.emit("log", level="info", message="Espera, estoy terminando...")
             return
+        self._turn_task = asyncio.current_task()
         async with self._busy:
             if announce:
                 self.bus.emit("user", text=text)
@@ -176,11 +211,21 @@ class Jarvis:
             async def on_tool(name: str, args) -> None:
                 self.bus.emit("tool", name=name, args=args)
 
-            reply = await self.brain.respond(text, on_delta=on_delta,
-                                             on_sentence=on_sentence, on_tool=on_tool)
+            try:
+                reply = await self.brain.respond(text, on_delta=on_delta,
+                                                 on_sentence=on_sentence,
+                                                 on_tool=on_tool)
+            except asyncio.CancelledError:
+                log.info("turno cancelado: el usuario ha interrumpido")
+                raise
             self.bus.emit("assistant_done", text=reply)
             await self._speech_queue.join()
-            self._set_state(IDLE)
+            if self.state in (THINKING, SPEAKING):
+                self._set_state(IDLE)
+
+    def submit(self, text: str) -> None:
+        """Lanza un turno desde la interfaz, recordando la tarea para poder cortarla."""
+        self._turn_task = self._spawn(self.handle_text(text))
 
     async def _announce(self, message: str) -> None:
         """Habla por iniciativa propia (por ejemplo, al vencer un temporizador)."""
@@ -192,18 +237,21 @@ class Jarvis:
         """Sintetiza y reproduce frase a frase, en orden."""
         while True:
             sentence = await self._speech_queue.get()
+            epoch = self._speech_epoch
             try:
                 if sentence:
-                    await self._speak(sentence)
+                    await self._speak(sentence, epoch)
             except Exception:  # noqa: BLE001 - un fallo de voz no debe tumbar el bucle
                 log.exception("fallo al sintetizar")
             finally:
                 self._speech_queue.task_done()
 
-    async def _speak(self, text: str) -> None:
+    async def _speak(self, text: str, epoch: int | None = None) -> None:
         speech = await self.tts.synthesize(text)
         if not speech:
             return
+        if epoch is not None and epoch != self._speech_epoch:
+            return  # nos interrumpieron mientras se sintetizaba esta frase
         if self.state != SPEAKING:
             self._set_state(SPEAKING)
         if speech.mime == "audio/pcm":
@@ -218,6 +266,26 @@ class Jarvis:
         self.bus.emit("audio", mime=mime,
                       data=base64.b64encode(payload).decode("ascii"))
 
+    # -- corte de la respuesta ---------------------------------------------
+    def _cut_off(self, reason: str = "barge_in") -> None:
+        """Calla a Jarvis y cancela el turno que estaba en marcha."""
+        self.player.stop()
+        self._speech_epoch += 1   # invalida lo que ya se estaba sintetizando
+        self._drain_speech()
+        task = self._turn_task
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+        self._turn_task = None
+        self.bus.emit(reason)
+
+    def _drain_speech(self) -> None:
+        while not self._speech_queue.empty():
+            try:
+                self._speech_queue.get_nowait()
+                self._speech_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
     # -- controles desde la interfaz ---------------------------------------
     def activate(self) -> None:
         """Equivalente a decir la palabra de activación."""
@@ -226,13 +294,7 @@ class Jarvis:
             self.bus.emit("log", level="warning", message="No hay micrófono disponible.")
 
     def interrupt(self) -> None:
-        self.player.stop()
-        while not self._speech_queue.empty():
-            try:
-                self._speech_queue.get_nowait()
-                self._speech_queue.task_done()
-            except asyncio.QueueEmpty:
-                break
+        self._cut_off(reason="interrupted")
         self._followup_until = 0.0
         self._set_state(IDLE)
 

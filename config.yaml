@@ -34,6 +34,17 @@ wake:
   # Tras responder, Jarvis sigue escuchando N segundos sin wake word.
   followup_seconds: 8
 
+barge_in:
+  # Interrumpir a Jarvis hablando por encima.
+  enabled: true
+  mode: voice            # voice (tu voz le corta) | wakeword (di "Hey Jarvis") | off
+  threshold: 0.10        # nivel mínimo de voz para cortarle (0..1)
+  echo_gain: 1.4         # cuánto debe superar al eco de los altavoces (sube si se
+                         # corta solo al oírse; baja si te cuesta interrumpirle)
+  frames: 5              # frames seguidos que lo confirman (~150 ms)
+  guard_ms: 350          # margen tras empezar a hablar, ignora la cola de tu frase
+  preroll_frames: 10     # audio previo que se conserva para no perder palabras
+
 stt:
   provider: faster-whisper  # faster-whisper | groq | openai | none
   model: small              # tiny | base | small | medium | large-v3

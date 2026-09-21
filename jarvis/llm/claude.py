@@ -1,6 +1,7 @@
 """Cerebro: Claude con streaming y uso de herramientas."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import platform
 import re
@@ -78,6 +79,20 @@ class Brain:
         spoken: list[str] = []
         buffer = ""
 
+        def close_open_turn() -> None:
+            """Si nos cortan a mitad, cerramos el turno del asistente.
+
+            La API espera que los roles se alternen, así que dejamos constancia
+            de lo que llegó a decirse antes de la interrupción.
+            """
+            if self.messages and self.messages[-1]["role"] == "assistant":
+                return
+            partial = ("".join(spoken) + buffer).strip()
+            self.messages.append({
+                "role": "assistant",
+                "content": (partial + " (interrumpido por el usuario)").strip(),
+            })
+
         async def flush(force: bool = False) -> None:
             """Envía frases completas al TTS para que empiece a hablar antes."""
             nonlocal buffer
@@ -94,57 +109,64 @@ class Brain:
                 await on_sentence(buffer.strip())
                 buffer = ""
 
-        for _ in range(8):  # tope de vueltas del bucle de herramientas
-            try:
-                async with self.client.messages.stream(
-                    model=self.model,
-                    max_tokens=self.max_tokens,
-                    system=self._system_prompt(),
-                    messages=self.messages,
-                    tools=tools,
-                    output_config={"effort": self.effort},
-                ) as stream:
-                    async for event in stream:
-                        if event.type == "text":
-                            buffer += event.text
-                            if on_delta is not None:
-                                await on_delta(event.text)
-                            await flush()
-                    response = await stream.get_final_message()
-            except anthropic.APIStatusError as exc:
-                log.error("error de la API (%s): %s", exc.status_code, exc)
-                return "Tengo un problema para conectarme con el modelo."
-            except anthropic.APIConnectionError as exc:
-                log.error("sin conexión con la API: %s", exc)
-                return "No tengo conexión ahora mismo."
+        try:
+            for _ in range(8):  # tope de vueltas del bucle de herramientas
+                try:
+                    async with self.client.messages.stream(
+                        model=self.model,
+                        max_tokens=self.max_tokens,
+                        system=self._system_prompt(),
+                        messages=self.messages,
+                        tools=tools,
+                        output_config={"effort": self.effort},
+                    ) as stream:
+                        async for event in stream:
+                            if event.type == "text":
+                                buffer += event.text
+                                if on_delta is not None:
+                                    await on_delta(event.text)
+                                await flush()
+                        response = await stream.get_final_message()
+                except anthropic.APIStatusError as exc:
+                    log.error("error de la API (%s): %s", exc.status_code, exc)
+                    return "Tengo un problema para conectarme con el modelo."
+                except anthropic.APIConnectionError as exc:
+                    log.error("sin conexión con la API: %s", exc)
+                    return "No tengo conexión ahora mismo."
 
-            text = "".join(block.text for block in response.content
-                           if block.type == "text")
-            spoken.append(text)
-            self.messages.append({"role": "assistant", "content": response.content})
+                text = "".join(block.text for block in response.content
+                               if block.type == "text")
+                spoken.append(text)
+                self.messages.append({"role": "assistant", "content": response.content})
 
-            if response.stop_reason == "refusal":
-                await flush(force=True)
-                return "Prefiero no responder a eso."
+                if response.stop_reason == "refusal":
+                    await flush(force=True)
+                    return "Prefiero no responder a eso."
 
-            if response.stop_reason == "pause_turn":
-                continue  # la búsqueda web se reanuda enviando el turno de vuelta
+                if response.stop_reason == "pause_turn":
+                    continue  # la búsqueda web se reanuda enviando el turno de vuelta
 
-            tool_uses = [block for block in response.content if block.type == "tool_use"]
-            if not tool_uses:
-                await flush(force=True)
-                return "\n".join(part for part in spoken if part).strip()
+                tool_uses = [block for block in response.content
+                             if block.type == "tool_use"]
+                if not tool_uses:
+                    await flush(force=True)
+                    return "\n".join(part for part in spoken if part).strip()
 
-            results = []
-            for block in tool_uses:
-                if on_tool is not None:
-                    await on_tool(block.name, block.input)
-                output = await self.toolbox.run(block.name, dict(block.input or {}))
-                log.info("herramienta %s -> %s", block.name, str(output)[:120])
-                results.append({"type": "tool_result", "tool_use_id": block.id,
-                                "content": str(output)})
-            self.messages.append({"role": "user", "content": results})
+                results = []
+                for block in tool_uses:
+                    if on_tool is not None:
+                        await on_tool(block.name, block.input)
+                    output = await self.toolbox.run(block.name, dict(block.input or {}))
+                    log.info("herramienta %s -> %s", block.name, str(output)[:120])
+                    results.append({"type": "tool_result", "tool_use_id": block.id,
+                                    "content": str(output)})
+                self.messages.append({"role": "user", "content": results})
 
-        await flush(force=True)
-        return "\n".join(part for part in spoken if part).strip() or \
-            "No he podido completar la petición."
+            await flush(force=True)
+            return "\n".join(part for part in spoken if part).strip() or \
+                "No he podido completar la petición."
+        except asyncio.CancelledError:
+            # Barge-in: el usuario ha hablado encima. Dejamos la conversación
+            # en un estado válido antes de propagar la cancelación.
+            close_open_turn()
+            raise

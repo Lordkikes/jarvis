@@ -8,6 +8,8 @@ import threading
 import wave
 from typing import Any
 
+from .capture import _rms
+
 log = logging.getLogger("jarvis.audio.player")
 
 
@@ -29,17 +31,24 @@ class AudioPlayer:
         self.device = device
         self._stop = threading.Event()
         self.available = True
+        # Nivel del trozo que suena ahora mismo: lo usa el detector de barge-in
+        # para saber cuánto eco puede estar entrando por el micrófono.
+        self.level = 0.0
 
     def stop(self) -> None:
         """Corta la reproducción en curso (el usuario volvió a hablar)."""
         self._stop.set()
+        self.level = 0.0
 
     async def play(self, pcm: bytes, sample_rate: int) -> bool:
         """Devuelve True si sonó localmente, False si no hay salida de audio."""
         if not pcm or not self.available:
             return False
         self._stop.clear()
-        return await asyncio.to_thread(self._play_blocking, pcm, sample_rate)
+        try:
+            return await asyncio.to_thread(self._play_blocking, pcm, sample_rate)
+        finally:
+            self.level = 0.0
 
     def _play_blocking(self, pcm: bytes, sample_rate: int) -> bool:
         try:
@@ -58,9 +67,13 @@ class AudioPlayer:
                     if self._stop.is_set():
                         log.info("reproducción interrumpida")
                         break
-                    stream.write(pcm[offset:offset + chunk])
+                    block = pcm[offset:offset + chunk]
+                    self.level = _rms(block)
+                    stream.write(block)
         except Exception as exc:  # noqa: BLE001
             log.warning("fallo al reproducir (%s); se usará el navegador", exc)
             self.available = False
             return False
+        finally:
+            self.level = 0.0
         return True

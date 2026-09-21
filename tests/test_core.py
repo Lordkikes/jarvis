@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from jarvis.audio.bargein import BargeInDetector, make_barge_in  # noqa: E402
 from jarvis.audio.player import pcm_to_wav  # noqa: E402
 from jarvis.audio.vad import Utterance  # noqa: E402
 from jarvis.bus import EventBus  # noqa: E402
@@ -118,6 +119,87 @@ class TestToolbox(unittest.TestCase):
 
     def test_unknown_tool_is_reported(self):
         self.assertIn("desconocida", asyncio.run(self.toolbox.run("inventada", {})))
+
+
+class TestBargeIn(unittest.TestCase):
+    def detector(self, **kwargs):
+        options = dict(sample_rate=SAMPLE_RATE, frame_ms=FRAME_MS, threshold=0.10,
+                       echo_gain=1.4, frames=3, guard_ms=0, preroll_frames=4)
+        options.update(kwargs)
+        return BargeInDetector(**options)
+
+    def test_disabled_never_interrupts(self):
+        detector = self.detector(mode="off")
+        detector.arm()
+        for _ in range(20):
+            self.assertIsNone(detector.feed(tone(), playback_level=0.0))
+
+    def test_voice_over_silence_interrupts(self):
+        detector = self.detector()
+        detector.arm()
+        result = None
+        for _ in range(6):
+            result = detector.feed(tone(), playback_level=0.0)
+            if result is not None:
+                break
+        self.assertIsNotNone(result)
+        self.assertTrue(result, "el pre-roll no puede venir vacío")
+
+    def test_preroll_keeps_recent_audio(self):
+        detector = self.detector(frames=6, preroll_frames=4)
+        detector.arm()
+        for _ in range(10):
+            result = detector.feed(tone(), playback_level=0.0)
+            if result is not None:
+                self.assertEqual(len(result), 4)  # se guardan los 4 últimos frames
+                return
+        self.fail("no se detectó la interrupción")
+
+    def test_own_echo_does_not_interrupt(self):
+        """Lo que sale por los altavoces entra por el micro: no debe cortarse solo."""
+        detector = self.detector()
+        detector.arm()
+        for _ in range(30):
+            # El micro oye el mismo nivel que se está reproduciendo.
+            self.assertIsNone(detector.feed(tone(), playback_level=0.95))
+
+    def test_quiet_noise_does_not_interrupt(self):
+        detector = self.detector()
+        detector.arm()
+        for _ in range(30):
+            self.assertIsNone(detector.feed(tone(600), playback_level=0.0))
+
+    def test_isolated_peak_does_not_interrupt(self):
+        """Un golpe suelto entre silencios no cuenta como voz."""
+        detector = self.detector(frames=4)
+        detector.arm()
+        for _ in range(10):
+            self.assertIsNone(detector.feed(tone(), playback_level=0.0))
+            self.assertIsNone(detector.feed(silence(), playback_level=0.0))
+
+    def test_guard_window_ignores_the_tail_of_your_own_phrase(self):
+        detector = self.detector(guard_ms=10_000)
+        detector.arm()
+        for _ in range(20):
+            self.assertIsNone(detector.feed(tone(), playback_level=0.0))
+
+    def test_wakeword_mode_only_reacts_to_the_wake_word(self):
+        detector = self.detector(mode="wakeword")
+        detector.arm()
+        for _ in range(10):
+            self.assertIsNone(detector.feed(tone(), playback_level=0.0))
+        self.assertIsNotNone(detector.feed(silence(), wake_hit=True))
+
+    def test_not_armed_means_not_listening(self):
+        detector = self.detector()
+        for _ in range(20):
+            self.assertIsNone(detector.feed(tone(), playback_level=0.0))
+
+    def test_factory_reads_config(self):
+        detector = make_barge_in(Config({"barge_in": {"enabled": False, "mode": "voice"}}))
+        self.assertFalse(detector.enabled)
+        detector = make_barge_in(Config({"barge_in": {"mode": "wakeword"}}))
+        self.assertEqual(detector.mode, "wakeword")
 
 
 class TestWav(unittest.TestCase):

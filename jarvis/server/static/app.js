@@ -24,7 +24,7 @@
     idle:      { text: "En reposo",   hint: "Di «Hey Jarvis» o pulsa el micrófono" },
     listening: { text: "Te escucho…", hint: "Habla con naturalidad; me callo cuando pares" },
     thinking:  { text: "Pensando…",   hint: "Consultando el modelo y las herramientas" },
-    speaking:  { text: "Hablando",    hint: "Pulsa Esc para interrumpirme" },
+    speaking:  { text: "Hablando",    hint: "Háblame encima para cortarme, o pulsa Esc" },
     error:     { text: "Algo falla",  hint: "Revisa la consola del servidor" },
   };
 
@@ -72,6 +72,7 @@
         $("chip-stt").textContent = "oído: " + short(event.stt);
         $("chip-tts").textContent = "voz: " + short(event.tts);
         $("chip-wake").textContent = event.voice ? "wake: " + short(event.wake) : "sin micro";
+        $("chip-barge").textContent = "corte: " + short(event.barge_in);
         if (event.greeting) addMessage("system", event.greeting);
         if (!event.voice) {
           addMessage("system", "No hay micrófono disponible: usa el cuadro de texto.");
@@ -124,6 +125,17 @@
 
       case "audio":
         playAudio(event.data, event.mime);
+        break;
+
+      case "barge_in":
+        addMessage("system", "✋ Te he cedido la palabra");
+        stopAudio();
+        currentBubble = null;
+        break;
+
+      case "interrupted":
+        stopAudio();
+        currentBubble = null;
         break;
 
       case "timer":
@@ -203,6 +215,13 @@
   }
 
   // --- Audio de respaldo (cuando el servidor no tiene altavoces) -------------
+  function stopAudio() {
+    // Solo aplica al respaldo del navegador; con altavoces locales corta el servidor.
+    ui.player.pause();
+    ui.player.removeAttribute("src");
+    ui.player.load();
+  }
+
   function playAudio(base64, mime) {
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
     const url = URL.createObjectURL(new Blob([bytes], { type: mime || "audio/wav" }));

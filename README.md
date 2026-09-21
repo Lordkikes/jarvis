@@ -125,7 +125,7 @@ Di **«Hey Jarvis»**, espera a que el orbe se ponga verde y habla.
 | Activar por voz | Di «Hey Jarvis» |
 | Activar a mano | Botón del micrófono o **barra espaciadora** |
 | Escribir en vez de hablar | Cuadro de texto inferior (o pulsa `/`) |
-| Interrumpir a Jarvis | Botón de stop o **Esc** |
+| Interrumpir a Jarvis | **Háblale encima** (barge-in), botón de stop o **Esc** |
 | Silenciar el micrófono | Botón del micro arriba o tecla **M** |
 | Mostrar/ocultar la conversación | Botón de las tres rayas |
 
@@ -134,6 +134,50 @@ escuchándote, **ámbar** pensando, **cian** hablando.
 
 Tras responder, Jarvis sigue escuchando 8 segundos sin necesidad de repetir la
 palabra de activación (`wake.followup_seconds`), para poder encadenar frases.
+
+### Interrumpirle hablando (barge-in)
+
+No hace falta esperar a que termine: empieza a hablar y se calla a media frase,
+descarta lo que le quedaba por decir y se pone a escucharte. Lo que ya había
+dicho queda en el contexto marcado como interrumpido, así que «no, mejor en
+inglés» se entiende sin repetir nada.
+
+El problema difícil aquí es el **eco**: el micrófono también oye a Jarvis. La
+solución que usa este proyecto es comparar el nivel del micro con el del audio
+que está sonando en ese mismo instante (`AudioPlayer.level`): tu voz tiene que
+superar al eco por un margen (`echo_gain`) durante varios frames seguidos
+(`frames`), y el VAD tiene que confirmar que es voz y no un portazo. Los frames
+inmediatamente anteriores se conservan (`preroll_frames`) y se usan como
+principio de tu nueva frase, para que no se pierdan las primeras sílabas.
+
+```yaml
+barge_in:
+  enabled: true
+  mode: voice        # voice | wakeword | off
+  threshold: 0.10    # nivel mínimo de voz para cortarle
+  echo_gain: 1.4     # cuánto debe superar al eco de los altavoces
+  frames: 5          # frames seguidos que lo confirman (~150 ms)
+  guard_ms: 350      # margen tras empezar a responder
+  preroll_frames: 10 # audio previo que se conserva
+```
+
+| Si te pasa esto | Ajusta |
+|---|---|
+| Se corta solo al oírse a sí mismo | Sube `echo_gain` a 1.8–2.5 y `threshold` a 0.15 |
+| Cuesta interrumpirle, hay que gritar | Baja `echo_gain` a 1.1 y `threshold` a 0.07 |
+| Le corta el ruido de fondo | Sube `frames` a 8 y `audio.vad_aggressiveness` a 3 |
+| Pierde tus primeras palabras | Sube `preroll_frames` a 15 |
+| Con altavoces es imposible afinarlo | `mode: wakeword`: solo le corta oír «Hey Jarvis» |
+
+Un caso en el que el truco del eco no puede ayudar: cuando el servidor no tiene
+altavoces y la voz se reproduce **en el navegador**, el detector no sabe a qué
+volumen está sonando. Ahí usa auriculares o `mode: wakeword`.
+
+**Con auriculares funciona sin tocar nada.** Con altavoces a volumen alto, el
+método por energía tiene sus límites: no hay cancelación de eco acústico (AEC)
+en el proyecto. Si tu sistema la ofrece, úsala en la entrada del micrófono
+(PulseAudio: `module-echo-cancel`; macOS y Windows la aplican en algunos
+dispositivos), o pásate a `mode: wakeword`, que es inmune al problema.
 
 ### Lo que ya sabe hacer
 
@@ -161,6 +205,7 @@ jarvis/
 │   ├── audio/
 │   │   ├── capture.py      # micrófono -> frames
 │   │   ├── vad.py          # ¿ha terminado de hablar?
+│   │   ├── bargein.py      # ★ ¿me está interrumpiendo?
 │   │   ├── wakeword.py     # "Hey Jarvis"
 │   │   └── player.py       # altavoces (con interrupción)
 │   ├── stt/                # whisper_local.py | cloud.py
@@ -186,8 +231,11 @@ Los tres ficheros marcados con ★ son el 80 % de la lógica.
   de modo que no se vuelve a pagar en cada turno.
 - **`effort: low`** en la llamada al modelo: prioriza latencia, que es lo que
   importa en una conversación hablada. Súbelo a `high` para tareas complejas.
-- **El micrófono se ignora mientras Jarvis habla**, para que no se escuche a
-  sí mismo.
+- **Barge-in**: mientras Jarvis habla, el micrófono sigue analizándose, pero
+  solo para decidir si le estás interrumpiendo (`jarvis/audio/bargein.py`).
+- **Cancelación limpia del turno**: al interrumpir se corta el audio, se
+  descartan las frases pendientes y se cancela la petición al modelo; el
+  cerebro cierra el turno abierto para que el historial siga siendo válido.
 
 ---
 
@@ -278,6 +326,7 @@ audio:
 | Tarda mucho en responder | `stt.model: base`, `llm.model: claude-sonnet-5`, `llm.effort: low` |
 | `invalid x-api-key` | La clave de `.env` no es válida o no se cargó: revísala con `doctor.py` |
 | Se oye a sí mismo | Usa auriculares, o baja el volumen: el eco puede disparar el wake word |
+| Se interrumpe solo constantemente | Sube `barge_in.echo_gain`, o `barge_in.mode: wakeword` (ver *barge-in*) |
 | La voz suena en el navegador, no en los altavoces | No hay salida de audio local; es el respaldo automático. Revisa `audio.output_device` |
 
 ---
@@ -301,7 +350,8 @@ La caché del prompt reduce bastante la entrada en conversaciones largas.
 
 Ideas para seguir construyendo, más o menos por dificultad:
 
-1. **Barge-in real**: interrumpirle hablando encima (requiere cancelación de eco).
+1. **Cancelación de eco (AEC)** con `webrtc-audio-processing` o `speexdsp`, para
+   que el barge-in sea infalible con altavoces a volumen alto.
 2. **Más herramientas**: domótica, calendario, correo, control de música.
 3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
 4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.
