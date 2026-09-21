@@ -14,8 +14,11 @@ from .audio.player import AudioPlayer, pcm_to_wav
 from .audio.vad import Utterance
 from .audio.wakeword import make_wakeword
 from .bus import EventBus
+from .config import data_path
 from .llm.claude import Brain
 from .llm.tools import Toolbox
+from .sources import make_sources
+from .sources.store import Store
 from .stt import make_stt
 from .tts import make_tts
 
@@ -38,7 +41,8 @@ class Jarvis:
         self._followup_until = 0.0
         self._busy = asyncio.Lock()
 
-        self.toolbox = Toolbox(cfg, bus, on_announce=self._announce)
+        self.store, self.sources = self._make_index(cfg)
+        self.toolbox = Toolbox(cfg, bus, on_announce=self._announce, store=self.store)
         self.brain = Brain(cfg, self.toolbox)
         self.stt = make_stt(cfg)
         self.tts = make_tts(cfg)
@@ -52,9 +56,20 @@ class Jarvis:
         self._turn_task: asyncio.Task | None = None
         self.capture: AudioCapture | None = None
 
+    @staticmethod
+    def _make_index(cfg):
+        """Índice local de correos y sesiones. Sin fuentes, no se crea nada."""
+        sources = make_sources(cfg)
+        if not sources:
+            return None, []
+        store = Store(data_path(cfg.get("sources.database", "data/index.db")))
+        return store, sources
+
     # -- ciclo de vida -----------------------------------------------------
     async def start(self) -> None:
         self._spawn(self._speech_worker())
+        if self.sources:
+            self._spawn(self._sync_worker())
         try:
             self.capture = AudioCapture(
                 loop=asyncio.get_running_loop(),
@@ -95,6 +110,8 @@ class Jarvis:
             task.cancel()
         if self.capture is not None:
             self.capture.stop()
+        if self.store is not None:
+            self.store.close()
 
     def _spawn(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
@@ -242,6 +259,20 @@ class Jarvis:
         """Habla por iniciativa propia (por ejemplo, al vencer un temporizador)."""
         self.bus.emit("assistant_done", text=message)
         await self._speech_queue.put(message)
+
+    # -- ingesta en segundo plano ------------------------------------------
+    async def _sync_worker(self) -> None:
+        """Trae correos y sesiones cada N minutos, sin tocar la conversación."""
+        minutes = max(1, int(self.cfg.get("sources.interval_minutes", 15)))
+        while True:
+            for source in self.sources:
+                try:
+                    changed = await asyncio.to_thread(source.sync, self.store)
+                    if changed:
+                        self.bus.emit("sync", source=source.name, nuevos=changed)
+                except Exception:  # noqa: BLE001 - una fuente caída no para al resto
+                    log.exception("fallo sincronizando %s", source.name)
+            await asyncio.sleep(minutes * 60)
 
     # -- salida de voz -----------------------------------------------------
     async def _speech_worker(self) -> None:
