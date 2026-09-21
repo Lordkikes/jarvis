@@ -1,5 +1,7 @@
 # Jarvis
 
+[![pruebas](https://github.com/Lordkikes/jarvis/actions/workflows/tests.yml/badge.svg)](https://github.com/Lordkikes/jarvis/actions/workflows/tests.yml)
+
 Asistente de voz personal que se activa cuando le hablas, entiende, razona con
 Claude, ejecuta acciones en tu equipo y responde en voz alta — con una interfaz
 web moderna que reacciona a tu voz en tiempo real.
@@ -262,11 +264,28 @@ jarvis/
 │       └── static/
 │           ├── shared/client.js    # conexión y eventos (común a los temas)
 │           └── themes/             # orb, hud, paper, terminal, wave
-├── scripts/                # setup.sh, doctor.py
-└── tests/                  # python -m unittest discover -s tests
+├── scripts/                # setup.sh, doctor.py, check_config.py, ci_smoke.sh
+├── tests/                  # python -m unittest discover -s tests
+└── .github/workflows/      # pruebas automáticas en cada push
 ```
 
 Los tres ficheros marcados con ★ son el 80 % de la lógica.
+
+### Pruebas y CI
+
+```bash
+python -m unittest discover -s tests   # 43 pruebas, ~1 s
+python scripts/check_config.py         # config.yaml coherente con el repo
+bash scripts/ci_smoke.sh               # el servidor arranca y sirve los temas
+```
+
+En cada push se ejecutan tres trabajos:
+
+| Trabajo | Qué hace |
+|---|---|
+| `pruebas` | Las 43 pruebas en Python 3.10, 3.11 y 3.12, la comprobación de `config.yaml` y la prueba de humo del servidor. Instala solo `requirements.txt`: las pruebas están escritas para funcionar sin micrófono |
+| `cancelación de eco` | Compila `webrtc-audio-processing` y repite las pruebas. Es el único sitio donde las que miden la cancelación real llegan a ejecutarse, y falla si se saltan |
+| `interfaz` | Sintaxis de todos los `.js` y que cada tema tenga sus tres piezas |
 
 ### Detalles que hacen que se sienta rápido
 
