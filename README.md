@@ -259,7 +259,9 @@ jarvis/
 │   ├── tts/                # piper_tts.py | elevenlabs_tts.py | system_tts.py
 │   └── server/
 │       ├── app.py          # FastAPI + WebSocket
-│       └── static/         # index.html, styles.css, app.js, orb.js
+│       └── static/
+│           ├── shared/client.js    # conexión y eventos (común a los temas)
+│           └── themes/             # orb, hud, paper, terminal, wave
 ├── scripts/                # setup.sh, doctor.py
 └── tests/                  # python -m unittest discover -s tests
 ```
@@ -287,6 +289,46 @@ Los tres ficheros marcados con ★ son el 80 % de la lógica.
 ---
 
 ## 6. Personalización
+
+### Elegir la interfaz
+
+Hay cinco, y se cambian sin reiniciar nada: añade `?theme=` a la URL, o usa el
+selector que llevan todas en la esquina.
+
+| Tema | Cómo es | Para quién |
+|---|---|---|
+| `orb` | Orbe reactivo sobre fondo oscuro con aurora | El término medio: bonito y legible |
+| `hud` | Reactor de arcos, telemetría y rejilla, todo monoespaciado | La fantasía de la película |
+| `paper` | Claro, tipográfico, una sola línea de onda | Escritorio tranquilo, uso diario |
+| `terminal` | Fósforo verde, líneas de barrido, todo texto | Si vives en la consola |
+| `wave` | Burbujas de chat y barras de voz, claro u oscuro según el sistema | Si lo quieres como una app de mensajería |
+
+```bash
+http://127.0.0.1:8765/?theme=hud     # probar una
+```
+
+```yaml
+server:
+  theme: hud        # dejarla fija en config.yaml
+```
+
+Todas hablan con el mismo servidor y muestran lo mismo (estado, transcripción
+en vivo, herramientas, interrupciones). Solo cambia la piel.
+
+**Hacer una tuya**: copia una carpeta de `jarvis/server/static/themes/` y
+cambia su CSS. La lógica de conexión está en `static/shared/client.js`, que
+cada tema usa así:
+
+```js
+const client = new JarvisClient();
+client.on("state", (e) => pintarEstado(e.state))
+      .on("level", (e) => moverVisualizador(e.value))
+      .on("assistant_delta", (e) => escribir(e.text))
+      .connect();
+```
+
+El servidor descubre los temas solos: si la carpeta tiene un `index.html`,
+aparece en `/api/themes` y en el selector.
 
 ### Cambiar la personalidad
 

@@ -1,0 +1,122 @@
+/* ===========================================================================
+   Tema Terminal: fósforo verde, líneas de barrido y todo en texto.
+   =========================================================================== */
+
+:root {
+  --bg: #020604;
+  --fg: #3f7;
+  --fg-dim: rgba(51, 255, 119, 0.55);
+  --fg-faint: rgba(51, 255, 119, 0.28);
+  --amber: #ffb300;
+  --red: #ff5f56;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+body[data-state="thinking"] { --fg: #ffc94d; --fg-dim: rgba(255, 201, 77, 0.55); }
+body[data-state="speaking"] { --fg: #6ff; --fg-dim: rgba(102, 255, 255, 0.55); }
+body[data-state="error"]    { --fg: #ff5f56; --fg-dim: rgba(255, 95, 86, 0.55); }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13.5px;
+  line-height: 1.55;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  text-shadow: 0 0 6px color-mix(in srgb, var(--fg) 45%, transparent);
+}
+
+/* Efecto CRT */
+.scanlines {
+  position: fixed; inset: 0; z-index: 5; pointer-events: none;
+  background: repeating-linear-gradient(
+    180deg, rgba(0, 0, 0, 0.22) 0 1px, transparent 1px 3px);
+  opacity: 0.6;
+}
+.glow {
+  position: fixed; inset: 0; z-index: 4; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%,
+    transparent 55%, rgba(0, 0, 0, 0.55) 100%);
+}
+
+/* Pantalla */
+.screen {
+  display: flex; flex-direction: column;
+  min-height: 0;
+  padding: 22px 26px 6px;
+  overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--fg-faint) transparent;
+}
+.screen::-webkit-scrollbar { width: 6px; }
+.screen::-webkit-scrollbar-thumb { background: var(--fg-faint); }
+
+.banner {
+  margin: 0 0 4px;
+  color: var(--fg-dim);
+  font-size: 11px; line-height: 1.15;
+  white-space: pre;
+  overflow: hidden;
+}
+
+.boot { margin: 0 0 12px; color: var(--fg-faint); font-size: 12px; }
+
+.stream { flex: 0 0 auto; }
+
+.line { margin: 0 0 4px; white-space: pre-wrap; word-break: break-word; }
+.line__tag { color: var(--fg-faint); }
+.line--user { color: var(--amber); }
+.line--user .line__tag { color: var(--amber); opacity: 0.7; }
+.line--assistant { color: var(--fg); }
+.line--tool { color: var(--fg-dim); }
+.line--system { color: var(--fg-faint); }
+
+/* Prompt */
+.prompt { display: flex; align-items: center; gap: 8px; padding: 8px 0 12px; }
+/* El bloque parpadea mientras la línea está vacía; al escribir manda el cursor real. */
+.prompt:has(.prompt__input:not(:placeholder-shown)) .prompt__cursor { display: none; }
+.prompt__sign { color: var(--fg-dim); white-space: nowrap; }
+.prompt__input {
+  flex: 1; min-width: 0;
+  border: 0; outline: 0; background: transparent;
+  color: var(--fg); font-family: var(--mono); font-size: 13.5px;
+  caret-color: var(--fg);
+  margin-left: -4px;
+}
+.prompt__cursor { animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* Barra de estado */
+.statusbar {
+  display: flex; align-items: center; gap: 18px;
+  padding: 7px 26px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 11.5px; letter-spacing: 0.04em;
+  text-shadow: none;
+}
+.statusbar__state { font-weight: 500; }
+.statusbar__meter { font-variant-ligatures: none; }
+.statusbar__spacer { flex: 1; }
+.statusbar__keys { opacity: 0.65; }
+.statusbar__item { opacity: 0.8; }
+
+.theme-picker {
+  border: 0; border-radius: 0;
+  padding: 1px 4px;
+  background: var(--bg); color: var(--fg);
+  font-family: var(--mono); font-size: 11px; cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .banner { display: none; }
+  .statusbar__keys, .statusbar__item { display: none; }
+  .screen { padding: 16px 14px 4px; }
+}
+
+@media (prefers-reduced-motion: reduce) { .prompt__cursor { animation: none; } }

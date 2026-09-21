@@ -7,10 +7,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css" />
+<link rel="stylesheet" href="/static/themes/orb/styles.css" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='38' fill='none' stroke='%237c9cff' stroke-width='8'/><circle cx='50' cy='50' r='14' fill='%237c9cff'/></svg>" />
 </head>
-<body data-state="idle">
+<body data-state="idle" data-theme="orb">
 
 <div class="aurora" aria-hidden="true">
   <span class="aurora__blob aurora__blob--1"></span>
@@ -32,7 +32,7 @@
     <span class="chip" id="chip-barge" title="Interrupción por voz">—</span>
   </div>
 
-  <div class="topbar__actions">
+  <div class="topbar__actions" id="theme-slot">
     <button class="icon-btn" id="btn-mute" title="Silenciar micrófono (M)" aria-pressed="false">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg>
     </button>
@@ -87,7 +87,8 @@
 
 <audio id="player" hidden></audio>
 
-<script src="/static/orb.js"></script>
-<script src="/static/app.js"></script>
+<script src="/static/shared/client.js"></script>
+<script src="/static/themes/orb/orb.js"></script>
+<script src="/static/themes/orb/theme.js"></script>
 </body>
 </html>

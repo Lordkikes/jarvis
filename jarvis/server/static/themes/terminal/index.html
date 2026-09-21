@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>jarvis — tty</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/static/themes/terminal/styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23020604'/><text x='50' y='68' font-size='62' text-anchor='middle' fill='%2333ff77' font-family='monospace'>&gt;</text></svg>" />
+</head>
+<body data-state="idle" data-theme="terminal">
+
+<div class="scanlines" aria-hidden="true"></div>
+<div class="glow" aria-hidden="true"></div>
+
+<div class="screen">
+  <pre class="banner" aria-hidden="true">      _   _    ______     _____ ____
+     | | / \  |  _ \ \   / /_ _/ ___|
+  _  | |/ _ \ | |_) \ \ / / | |\___ \
+ | |_| / ___ \|  _ < \ V /  | | ___) |
+  \___/_/   \_\_| \_\ \_/  |___|____/
+</pre>
+  <p class="boot" id="boot">conectando…</p>
+
+  <div class="stream" id="log"></div>
+
+  <form class="prompt" id="form">
+    <span class="prompt__sign">tu@jarvis:~$</span>
+    <span class="prompt__cursor" aria-hidden="true">█</span>
+    <input class="prompt__input" id="input" type="text" autocomplete="off" spellcheck="false"
+           placeholder=" " aria-label="Orden para Jarvis" />
+  </form>
+</div>
+
+<footer class="statusbar">
+  <span class="statusbar__state" id="status-text">EN REPOSO</span>
+  <span class="statusbar__meter" id="meter">[..........]</span>
+  <span class="statusbar__item" id="s-model">—</span>
+  <span class="statusbar__item" id="s-audio">—</span>
+  <span class="statusbar__spacer"></span>
+  <span class="statusbar__keys">espacio:hablar esc:cortar m:micro</span>
+  <span class="statusbar__slot" id="theme-slot"></span>
+</footer>
+
+<script src="/static/shared/client.js"></script>
+<script src="/static/themes/terminal/theme.js"></script>
+</body>
+</html>

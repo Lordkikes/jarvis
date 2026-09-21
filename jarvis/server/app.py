@@ -16,6 +16,13 @@ from ..pipeline import Jarvis
 
 log = logging.getLogger("jarvis.server")
 STATIC = Path(__file__).parent / "static"
+THEMES_DIR = STATIC / "themes"
+DEFAULT_THEME = "orb"
+
+
+def available_themes() -> list[str]:
+    return sorted(path.name for path in THEMES_DIR.iterdir()
+                  if (path / "index.html").exists())
 
 
 def create_app(config_path: str | None = None) -> FastAPI:
@@ -33,8 +40,20 @@ def create_app(config_path: str | None = None) -> FastAPI:
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
     @app.get("/")
-    async def index() -> FileResponse:
-        return FileResponse(STATIC / "index.html")
+    async def index(theme: str | None = None) -> FileResponse:
+        """La interfaz es intercambiable: /?theme=hud para probar otra."""
+        themes = available_themes()
+        chosen = theme or cfg.get("server.theme", DEFAULT_THEME)
+        if chosen not in themes:
+            if theme:
+                log.warning("tema '%s' desconocido; uso %s", theme, DEFAULT_THEME)
+            chosen = DEFAULT_THEME
+        return FileResponse(THEMES_DIR / chosen / "index.html")
+
+    @app.get("/api/themes")
+    async def get_themes() -> dict:
+        return {"themes": available_themes(),
+                "current": cfg.get("server.theme", DEFAULT_THEME)}
 
     @app.get("/api/config")
     async def get_config() -> dict:

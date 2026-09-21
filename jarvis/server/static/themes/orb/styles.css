@@ -301,3 +301,18 @@ body[data-state="thinking"] .dock__stop { opacity: 1; pointer-events: auto; }
   .aurora__blob, .dock__pulse { animation: none; }
   * { transition-duration: 0.01ms !important; }
 }
+
+/* Selector de tema (compartido por todos los temas, con el estilo de cada uno) */
+.theme-picker {
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.theme-picker:hover { background: var(--surface-strong); color: var(--text); }
+.theme-picker option { background: var(--bg-soft); color: var(--text); }
