@@ -30,7 +30,7 @@ audio:
 wake:
   provider: openwakeword    # openwakeword | porcupine | none
   model: hey_jarvis         # openWakeWord: hey_jarvis, alexa... | porcupine: jarvis
-  threshold: 0.5
+  threshold: 0.35
   # Tras responder, Jarvis sigue escuchando N segundos sin wake word.
   followup_seconds: 8
 
