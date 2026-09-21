@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/static/styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='38' fill='none' stroke='%237c9cff' stroke-width='8'/><circle cx='50' cy='50' r='14' fill='%237c9cff'/></svg>" />
+</head>
+<body data-state="idle">
+
+<div class="aurora" aria-hidden="true">
+  <span class="aurora__blob aurora__blob--1"></span>
+  <span class="aurora__blob aurora__blob--2"></span>
+  <span class="aurora__blob aurora__blob--3"></span>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand__dot" aria-hidden="true"></span>
+    <h1 class="brand__name" id="brand-name">Jarvis</h1>
+  </div>
+
+  <div class="chips" id="chips" role="status" aria-live="polite">
+    <span class="chip" id="chip-model" title="Modelo de lenguaje">—</span>
+    <span class="chip" id="chip-stt" title="Reconocimiento de voz">—</span>
+    <span class="chip" id="chip-tts" title="Síntesis de voz">—</span>
+    <span class="chip" id="chip-wake" title="Palabra de activación">—</span>
+  </div>
+
+  <div class="topbar__actions">
+    <button class="icon-btn" id="btn-mute" title="Silenciar micrófono (M)" aria-pressed="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg>
+    </button>
+    <button class="icon-btn" id="btn-clear" title="Borrar conversación">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>
+    </button>
+    <button class="icon-btn" id="btn-panel" title="Mostrar / ocultar la conversación">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="stage">
+  <section class="orb-area">
+    <canvas id="orb" width="520" height="520" aria-hidden="true"></canvas>
+
+    <div class="status">
+      <p class="status__text" id="status-text">Conectando…</p>
+      <p class="status__hint" id="status-hint">Di «Hey Jarvis» o pulsa el micrófono</p>
+    </div>
+
+    <p class="caption" id="caption" aria-live="polite"></p>
+  </section>
+
+  <aside class="panel" id="panel" aria-label="Conversación">
+    <div class="panel__head">
+      <h2>Conversación</h2>
+      <span class="panel__count" id="panel-count">0</span>
+    </div>
+    <div class="panel__body" id="log"></div>
+  </aside>
+</main>
+
+<footer class="dock">
+  <button class="dock__mic" id="btn-mic" title="Activar a Jarvis (barra espaciadora)">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg>
+    <span class="dock__pulse" aria-hidden="true"></span>
+  </button>
+
+  <form class="dock__form" id="form">
+    <input class="dock__input" id="input" type="text" autocomplete="off"
+           placeholder="Escribe algo a Jarvis…" aria-label="Mensaje para Jarvis" />
+    <button class="dock__send" type="submit" title="Enviar">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 11.6 19 5.2a.6.6 0 0 1 .8.8l-6.4 14.5a.6.6 0 0 1-1.1 0l-2.5-5.6-5.6-2.5a.6.6 0 0 1 0-1.1Z"/></svg>
+    </button>
+  </form>
+
+  <button class="dock__stop" id="btn-stop" title="Interrumpir (Esc)">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+  </button>
+</footer>
+
+<audio id="player" hidden></audio>
+
+<script src="/static/orb.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,66 @@
+# ---------------------------------------------------------------------------
+# Configuración de Jarvis. Todos los valores pueden sobreescribirse con
+# variables de entorno usando el prefijo JARVIS_ (p. ej. JARVIS_LLM__MODEL).
+# ---------------------------------------------------------------------------
+
+assistant:
+  name: Jarvis
+  language: es
+  greeting: "Hola, soy Jarvis. Di 'Hey Jarvis' cuando me necesites."
+  # Personalidad / instrucciones del sistema para el modelo.
+  persona: |
+    Eres Jarvis, un asistente de voz personal. Hablas español neutro.
+    Tus respuestas se convierten en AUDIO, así que:
+    - Sé breve: 1 o 2 frases salvo que te pidan detalle.
+    - No uses markdown, listas con viñetas, emojis ni URLs largas.
+    - Escribe números y siglas como se pronuncian.
+    - Si necesitas un dato del mundo real (hora, clima, web), usa una herramienta.
+    - Si no sabes algo, dilo en una frase.
+
+audio:
+  input_device: null        # null = dispositivo por defecto; o índice/nombre
+  output_device: null
+  sample_rate: 16000
+  frame_ms: 30              # tamaño de frame para VAD (10, 20 o 30)
+  silence_ms: 900           # silencio que cierra la frase
+  min_speech_ms: 300        # ignora ruidos más cortos que esto
+  max_utterance_s: 20       # corte de seguridad
+  vad_aggressiveness: 2     # 0 (permisivo) .. 3 (estricto)
+
+wake:
+  provider: openwakeword    # openwakeword | porcupine | none
+  model: hey_jarvis         # openWakeWord: hey_jarvis, alexa... | porcupine: jarvis
+  threshold: 0.5
+  # Tras responder, Jarvis sigue escuchando N segundos sin wake word.
+  followup_seconds: 8
+
+stt:
+  provider: faster-whisper  # faster-whisper | groq | openai | none
+  model: small              # tiny | base | small | medium | large-v3
+  device: cpu               # cpu | cuda
+  compute_type: int8        # int8 | int8_float16 | float16
+  language: es
+
+llm:
+  provider: claude
+  model: claude-opus-5
+  effort: low               # low | medium | high | xhigh | max (latencia vs calidad)
+  max_tokens: 2048
+  memory_turns: 12          # turnos de conversación que se mantienen en contexto
+  web_search: true          # herramienta de búsqueda web del lado del servidor
+
+tools:
+  allow_system: true        # abrir apps/URLs y leer estado del equipo
+  notes_file: data/notes.json
+  memory_file: data/memory.json
+
+tts:
+  provider: piper           # piper | elevenlabs | system | none
+  voice: es_ES-davefx-medium
+  speed: 1.0
+  elevenlabs_voice_id: 21m00Tcm4TlvDq8ikWAM
+
+server:
+  host: 127.0.0.1
+  port: 8765
+  open_browser: true
