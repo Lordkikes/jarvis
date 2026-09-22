@@ -232,10 +232,12 @@ Jarvis indexa en segundo plano lo que le dejes ver y luego responde desde ese
 |---|---|---|
 | **Sesiones de Claude Code** | Lo que pediste en cada sesión, el proyecto, la rama, las herramientas usadas | 0 €, y no hace falta configurar nada |
 | **Correo (IMAP)** | Remitente, asunto, fecha y cuerpo de los últimos días | 0 €, solo lectura |
+| **Bluesky** | Tu línea temporal: quién publicó qué y cuándo | 0 €, API abierta |
+| **Mastodon** | Tu línea temporal de inicio | 0 €, API abierta |
 
 Preguntas que ya entiende: *«¿qué estuve haciendo ayer en el proyecto del
 cliente?»*, *«¿me ha escrito alguien sobre la factura?»*, *«resúmeme los
-correos de hoy»*.
+correos de hoy»*, *«¿qué se está diciendo en Bluesky?»*.
 
 Las sesiones de Claude Code se leen solas de `~/.claude/projects`. El correo
 hay que activarlo:
@@ -253,6 +255,28 @@ sources:
 # en .env — con Gmail, una contraseña de aplicación, no la de tu cuenta
 JARVIS_EMAIL_PASSWORD=xxxx xxxx xxxx xxxx
 ```
+
+Las redes sociales van igual: activarlas en `config.yaml` y poner la
+credencial en `.env`.
+
+```yaml
+sources:
+  bluesky:
+    enabled: true
+    handle: tu.handle.bsky.social
+  mastodon:
+    enabled: true
+    instance: https://mastodon.social
+```
+
+```bash
+JARVIS_BLUESKY_APP_PASSWORD=   # Ajustes → App Passwords (no la de tu cuenta)
+JARVIS_MASTODON_TOKEN=         # Preferencias → Desarrollo → permiso `read`
+```
+
+Las dos son de solo lectura y no publican nada. En Bluesky el token de acceso
+caduca en minutos, así que Jarvis pide sesión nueva en cada sincronización en
+vez de guardarlo.
 
 El buzón se abre en modo lectura y se usa `PEEK`: Jarvis no marca nada como
 leído ni mueve nada de sitio.
@@ -310,7 +334,9 @@ jarvis/
 │   ├── sources/            # ★ ingesta: índice SQLite + lectores
 │   │   ├── store.py        # búsqueda de texto completo (FTS5)
 │   │   ├── claude_code.py  # sesiones de ~/.claude/projects
-│   │   └── email_imap.py   # correo en solo lectura
+│   │   ├── email_imap.py   # correo en solo lectura
+│   │   ├── bluesky.py      # línea temporal de Bluesky
+│   │   └── mastodon.py     # línea temporal de Mastodon
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
 │   │   ├── claude.py       # ★ streaming + bucle de herramientas
@@ -517,8 +543,9 @@ La caché del prompt reduce bastante la entrada en conversaciones largas.
 
 Ideas para seguir construyendo, más o menos por dificultad:
 
-1. **Más fuentes**: Bluesky y Mastodon tienen API abierta y gratuita; X cobra
-   por uso (leer tus propios datos sale por céntimos al mes).
+1. **Más fuentes**: X cobra por uso desde 2026, pero leer *tus propios datos*
+   («Owned Reads») sale por céntimos al mes. Reddit tiene API gratuita con
+   OAuth.
 2. **Más herramientas**: domótica, calendario, control de música.
 3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
 4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.

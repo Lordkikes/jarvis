@@ -86,6 +86,17 @@ sources:
     path: ~/.claude/projects
     max_sessions: 200
 
+  bluesky:
+    enabled: false         # necesita una contraseña de aplicación
+    handle: ""             # tu.handle.bsky.social
+    service: https://bsky.social
+    limit: 50
+
+  mastodon:
+    enabled: false         # necesita un token de acceso personal
+    instance: https://mastodon.social
+    limit: 40              # 40 es el máximo que acepta la API
+
   email:
     enabled: false         # ponlo a true cuando tengas las credenciales
     host: imap.gmail.com   # Gmail necesita una contraseña de aplicación

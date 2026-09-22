@@ -6,12 +6,26 @@ es instantáneo, funciona sin conexión y el modelo solo ve lo que pediste.
 """
 from __future__ import annotations
 
+import html
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 log = logging.getLogger("jarvis.sources")
+
+_TAG = re.compile(r"<[^>]+>")
+_BLANKS = re.compile(r"\n{3,}")
+
+
+def html_to_text(content: str) -> str:
+    """HTML a texto legible. Lo usan el correo y Mastodon, que envían marcado."""
+    if not content:
+        return ""
+    content = re.sub(r"<br\s*/?>", "\n", content, flags=re.IGNORECASE)
+    content = re.sub(r"</p\s*>", "\n\n", content, flags=re.IGNORECASE)
+    return _BLANKS.sub("\n\n", html.unescape(_TAG.sub("", content))).strip()
 
 
 @dataclass
@@ -45,6 +59,29 @@ def make_sources(cfg) -> list:
             ))
         except Exception as exc:  # noqa: BLE001
             log.warning("fuente 'claude_code' no disponible (%s)", exc)
+
+    if cfg.get("sources.bluesky.enabled", False):
+        try:
+            from .bluesky import BlueskySource
+
+            sources.append(BlueskySource(
+                handle=cfg.get("sources.bluesky.handle", ""),
+                service=cfg.get("sources.bluesky.service", "https://bsky.social"),
+                limit=int(cfg.get("sources.bluesky.limit", 50)),
+            ))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("fuente 'bluesky' no disponible (%s)", exc)
+
+    if cfg.get("sources.mastodon.enabled", False):
+        try:
+            from .mastodon import MastodonSource
+
+            sources.append(MastodonSource(
+                instance=cfg.get("sources.mastodon.instance", ""),
+                limit=int(cfg.get("sources.mastodon.limit", 40)),
+            ))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("fuente 'mastodon' no disponible (%s)", exc)
 
     if cfg.get("sources.email.enabled", False):
         try:

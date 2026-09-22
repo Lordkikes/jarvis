@@ -105,16 +105,18 @@ class Toolbox:
         },
         {
             "name": "buscar_en_mis_fuentes",
-            "description": "Busca en lo que Jarvis tiene indexado: correos y "
-                           "sesiones de Claude Code. Úsala cuando pregunten por "
-                           "algo que pasó, alguien que escribió o en qué se estuvo "
+            "description": "Busca en lo que Jarvis tiene indexado: correos, "
+                           "sesiones de Claude Code y publicaciones de Bluesky y "
+                           "Mastodon. Úsala cuando pregunten por algo que pasó, "
+                           "alguien que escribió o publicó, o en qué se estuvo "
                            "trabajando.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "consulta": {"type": "string",
                                  "description": "Palabras clave, no una frase entera"},
-                    "fuente": {"type": "string", "enum": ["correo", "claude_code"],
+                    "fuente": {"type": "string",
+                               "enum": ["correo", "claude_code", "bluesky", "mastodon"],
                                "description": "Opcional, para acotar"},
                     "limite": {"type": "integer", "default": 5, "maximum": 15},
                 },
@@ -136,6 +138,18 @@ class Toolbox:
             "input_schema": {
                 "type": "object",
                 "properties": {"limite": {"type": "integer", "default": 5, "maximum": 15}},
+            },
+        },
+        {
+            "name": "publicaciones_recientes",
+            "description": "Últimas publicaciones indexadas de Bluesky y Mastodon.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "red": {"type": "string", "enum": ["bluesky", "mastodon"],
+                            "description": "Opcional; si no, las dos"},
+                    "limite": {"type": "integer", "default": 5, "maximum": 15},
+                },
             },
         },
         {
@@ -192,7 +206,8 @@ class Toolbox:
         if not self.allow_system:
             hidden |= {"abrir", "estado_del_sistema"}
         if self.store is None:
-            hidden |= {"buscar_en_mis_fuentes", "correos_recientes", "sesiones_recientes"}
+            hidden |= {"buscar_en_mis_fuentes", "correos_recientes",
+                       "sesiones_recientes", "publicaciones_recientes"}
         specs = [dict(spec) for spec in self.SPECS if spec["name"] not in hidden]
         if self.cfg.get("llm.web_search", False):
             # Herramienta del lado del servidor: la ejecuta la API, no nosotros.
@@ -339,6 +354,21 @@ class Toolbox:
                 f" · {meta.get('peticiones', 0)} peticiones"
                 f"\n    {row.get('title', '')}")
         return self._external("\n".join(lines))
+
+    def _tool_publicaciones_recientes(self, args: dict) -> str:
+        limite = min(15, int(args.get("limite", 5)))
+        if red := args.get("red"):
+            rows = self.store.recent(source=red, limit=limite)
+        else:
+            # Las dos redes mezcladas y ordenadas por fecha.
+            rows = sorted(
+                self.store.recent(source="bluesky", limit=limite)
+                + self.store.recent(source="mastodon", limit=limite),
+                key=lambda row: row.get("created_at") or "", reverse=True,
+            )[:limite]
+        if not rows:
+            return "No hay publicaciones indexadas. ¿Están activadas las redes en config.yaml?"
+        return self._external(self._format(rows))
 
     def _tool_estado_del_sistema(self, args: dict) -> str:  # noqa: ARG002
         try:
