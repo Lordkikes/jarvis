@@ -10,4 +10,5 @@ except ImportError:  # pragma: no cover
     import httpx  # type: ignore[no-redef]
 
 AsyncClient = httpx.AsyncClient
-__all__ = ["httpx", "AsyncClient"]
+Client = httpx.Client
+__all__ = ["httpx", "AsyncClient", "Client"]

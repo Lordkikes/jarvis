@@ -17,13 +17,12 @@ from datetime import datetime, timedelta, timezone
 from email import policy
 from email.utils import parsedate_to_datetime
 
-from . import Item
+from . import Item, html_to_text
 
 log = logging.getLogger("jarvis.sources.email")
 
 MAX_BODY = 4000
 BATCH = 25
-TAG = re.compile(r"<[^>]+>")
 BLANKS = re.compile(r"\n{3,}")
 
 
@@ -43,9 +42,7 @@ def _plain_text(message) -> str:
         content = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
 
     if part.get_content_type() == "text/html":
-        import html
-
-        content = html.unescape(TAG.sub(" ", content))
+        return html_to_text(content)
     return BLANKS.sub("\n\n", content).strip()
 
 
