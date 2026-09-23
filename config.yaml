@@ -97,6 +97,13 @@ sources:
     instance: https://mastodon.social
     limit: 40              # 40 es el máximo que acepta la API
 
+  reddit:
+    enabled: false         # necesita una aplicación de tipo «script»
+    username: ""           # tu usuario, sin el u/
+    feed: best             # best (tu portada) | hot | new | top
+    subreddits: []         # vacío = tu portada; o ["python", "selfhosted"]
+    limit: 40
+
   email:
     enabled: false         # ponlo a true cuando tengas las credenciales
     host: imap.gmail.com   # Gmail necesita una contraseña de aplicación

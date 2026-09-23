@@ -83,6 +83,19 @@ def make_sources(cfg) -> list:
         except Exception as exc:  # noqa: BLE001
             log.warning("fuente 'mastodon' no disponible (%s)", exc)
 
+    if cfg.get("sources.reddit.enabled", False):
+        try:
+            from .reddit import RedditSource
+
+            sources.append(RedditSource(
+                username=cfg.get("sources.reddit.username", ""),
+                feed=cfg.get("sources.reddit.feed", "best"),
+                subreddits=cfg.get("sources.reddit.subreddits", []),
+                limit=int(cfg.get("sources.reddit.limit", 40)),
+            ))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("fuente 'reddit' no disponible (%s)", exc)
+
     if cfg.get("sources.email.enabled", False):
         try:
             from .email_imap import EmailSource
