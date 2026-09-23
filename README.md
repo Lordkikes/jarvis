@@ -234,6 +234,7 @@ Jarvis indexa en segundo plano lo que le dejes ver y luego responde desde ese
 | **Correo (IMAP)** | Remitente, asunto, fecha y cuerpo de los últimos días | 0 €, solo lectura |
 | **Bluesky** | Tu línea temporal: quién publicó qué y cuándo | 0 €, API abierta |
 | **Mastodon** | Tu línea temporal de inicio | 0 €, API abierta |
+| **Reddit** | Tu portada, o los subreddits que elijas | 0 € para uso personal |
 
 Preguntas que ya entiende: *«¿qué estuve haciendo ayer en el proyecto del
 cliente?»*, *«¿me ha escrito alguien sobre la factura?»*, *«resúmeme los
@@ -274,9 +275,31 @@ JARVIS_BLUESKY_APP_PASSWORD=   # Ajustes → App Passwords (no la de tu cuenta)
 JARVIS_MASTODON_TOKEN=         # Preferencias → Desarrollo → permiso `read`
 ```
 
-Las dos son de solo lectura y no publican nada. En Bluesky el token de acceso
-caduca en minutos, así que Jarvis pide sesión nueva en cada sincronización en
-vez de guardarlo.
+Reddit necesita una aplicación de tipo **script** creada en
+[reddit.com/prefs/apps](https://www.reddit.com/prefs/apps):
+
+```yaml
+sources:
+  reddit:
+    enabled: true
+    username: tu_usuario       # sin el u/
+    subreddits: []             # vacío = tu portada; o ["python", "selfhosted"]
+```
+
+```bash
+JARVIS_REDDIT_CLIENT_ID=
+JARVIS_REDDIT_CLIENT_SECRET=
+JARVIS_REDDIT_PASSWORD=
+```
+
+> La contraseña de Reddit solo funciona si la cuenta **no tiene verificación
+> en dos pasos**. Con 2FA hay que añadir el código de seis dígitos al final
+> (`contraseña:123456`) y caduca, así que para el asistente conviene una
+> cuenta sin 2FA o dedicada.
+
+Las tres son de solo lectura y no publican nada. En Bluesky y en Reddit el
+token de acceso caduca (minutos y una hora respectivamente), así que Jarvis
+pide uno nuevo en cada sincronización en vez de guardarlo.
 
 El buzón se abre en modo lectura y se usa `PEEK`: Jarvis no marca nada como
 leído ni mueve nada de sitio.
@@ -336,7 +359,8 @@ jarvis/
 │   │   ├── claude_code.py  # sesiones de ~/.claude/projects
 │   │   ├── email_imap.py   # correo en solo lectura
 │   │   ├── bluesky.py      # línea temporal de Bluesky
-│   │   └── mastodon.py     # línea temporal de Mastodon
+│   │   ├── mastodon.py     # línea temporal de Mastodon
+│   │   └── reddit.py       # portada o subreddits elegidos
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
 │   │   ├── claude.py       # ★ streaming + bucle de herramientas
@@ -544,8 +568,7 @@ La caché del prompt reduce bastante la entrada en conversaciones largas.
 Ideas para seguir construyendo, más o menos por dificultad:
 
 1. **Más fuentes**: X cobra por uso desde 2026, pero leer *tus propios datos*
-   («Owned Reads») sale por céntimos al mes. Reddit tiene API gratuita con
-   OAuth.
+   («Owned Reads») sale por céntimos al mes.
 2. **Más herramientas**: domótica, calendario, control de música.
 3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
 4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.
