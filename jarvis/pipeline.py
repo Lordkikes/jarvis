@@ -68,8 +68,8 @@ class Jarvis:
     # -- ciclo de vida -----------------------------------------------------
     async def start(self) -> None:
         self._spawn(self._speech_worker())
-        if self.sources:
-            self._spawn(self._sync_worker())
+        for source in self.sources:
+            self._spawn(self._sync_worker(source))
         try:
             self.capture = AudioCapture(
                 loop=asyncio.get_running_loop(),
@@ -261,17 +261,22 @@ class Jarvis:
         await self._speech_queue.put(message)
 
     # -- ingesta en segundo plano ------------------------------------------
-    async def _sync_worker(self) -> None:
-        """Trae correos y sesiones cada N minutos, sin tocar la conversación."""
-        minutes = max(1, int(self.cfg.get("sources.interval_minutes", 15)))
+    async def _sync_worker(self, source) -> None:
+        """Sincroniza una fuente cada N minutos, sin tocar la conversación.
+
+        Una tarea por fuente, y no una que las recorra todas, porque no todas
+        piden el mismo ritmo: X cuesta dinero y quiere ir espaciada, mientras
+        que las sesiones de Claude Code se leen del disco y salen gratis.
+        """
+        default = max(1, int(self.cfg.get("sources.interval_minutes", 15)))
+        minutes = max(1, int(getattr(source, "interval_minutes", 0) or default))
         while True:
-            for source in self.sources:
-                try:
-                    changed = await asyncio.to_thread(source.sync, self.store)
-                    if changed:
-                        self.bus.emit("sync", source=source.name, nuevos=changed)
-                except Exception:  # noqa: BLE001 - una fuente caída no para al resto
-                    log.exception("fallo sincronizando %s", source.name)
+            try:
+                changed = await asyncio.to_thread(source.sync, self.store)
+                if changed:
+                    self.bus.emit("sync", source=source.name, nuevos=changed)
+            except Exception:  # noqa: BLE001 - una fuente caída no para al resto
+                log.exception("fallo sincronizando %s", source.name)
             await asyncio.sleep(minutes * 60)
 
     # -- salida de voz -----------------------------------------------------

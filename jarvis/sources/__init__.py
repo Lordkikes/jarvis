@@ -96,6 +96,18 @@ def make_sources(cfg) -> list:
         except Exception as exc:  # noqa: BLE001
             log.warning("fuente 'reddit' no disponible (%s)", exc)
 
+    if cfg.get("sources.x.enabled", False):
+        try:
+            from .x_twitter import XSource
+
+            sources.append(XSource(
+                user_id=cfg.get("sources.x.user_id", ""),
+                limit=int(cfg.get("sources.x.limit", 40)),
+                interval_minutes=int(cfg.get("sources.x.interval_minutes", 0)),
+            ))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("fuente 'x' no disponible (%s)", exc)
+
     if cfg.get("sources.email.enabled", False):
         try:
             from .email_imap import EmailSource
