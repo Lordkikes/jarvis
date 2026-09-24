@@ -226,7 +226,7 @@ wakeword` es el plan B infalible: solo le corta oír «Hey Jarvis».
 ### Lo que lee de ti
 
 Jarvis indexa en segundo plano lo que le dejes ver y luego responde desde ese
-índice, no saliendo a la red en mitad de la frase. Hoy hay dos fuentes:
+índice, no saliendo a la red en mitad de la frase. Hoy hay seis fuentes:
 
 | Fuente | Qué indexa | Coste |
 |---|---|---|
@@ -235,6 +235,7 @@ Jarvis indexa en segundo plano lo que le dejes ver y luego responde desde ese
 | **Bluesky** | Tu línea temporal: quién publicó qué y cuándo | 0 €, API abierta |
 | **Mastodon** | Tu línea temporal de inicio | 0 €, API abierta |
 | **Reddit** | Tu portada, o los subreddits que elijas | 0 € para uso personal |
+| **X** | Tu línea temporal cronológica | **De pago**: 0,001 $ por publicación distinta y día |
 
 Preguntas que ya entiende: *«¿qué estuve haciendo ayer en el proyecto del
 cliente?»*, *«¿me ha escrito alguien sobre la factura?»*, *«resúmeme los
@@ -297,9 +298,49 @@ JARVIS_REDDIT_PASSWORD=
 > (`contraseña:123456`) y caduca, así que para el asistente conviene una
 > cuenta sin 2FA o dedicada.
 
-Las tres son de solo lectura y no publican nada. En Bluesky y en Reddit el
-token de acceso caduca (minutos y una hora respectivamente), así que Jarvis
-pide uno nuevo en cada sincronización en vez de guardarlo.
+X es **la única fuente que cuesta dinero**. Desde febrero de 2026 su API se
+paga por uso, pero leer tus propios datos («Owned Reads») sale a 0,001 $ por
+recurso y X **deduplica por día UTC**: si una publicación ya se cobró hoy,
+volver a leerla es gratis. O sea que el gasto lo marca cuántas publicaciones
+distintas pasan por tu línea temporal al día, no cada cuánto sincroniza
+Jarvis. Con un timeline de 200 publicaciones nuevas al día son unos 6 $ al
+mes; `limit` pone el tope por sincronización.
+
+```yaml
+sources:
+  x:
+    enabled: true
+    user_id: ""            # tu id numérico (ver abajo)
+    limit: 40
+    interval_minutes: 60   # su propio ritmo, más espaciado que el resto
+```
+
+```bash
+# Portal de desarrolladores → tu app → Keys and tokens. Las cuatro, con
+# permiso de lectura; no caducan.
+JARVIS_X_API_KEY=
+JARVIS_X_API_SECRET=
+JARVIS_X_ACCESS_TOKEN=
+JARVIS_X_ACCESS_SECRET=
+```
+
+> Si dejas `user_id` vacío, Jarvis pregunta a la API quién eres en el primer
+> ciclo, lo apunta en el log y lo reutiliza mientras siga en marcha; esa
+> consulta también se factura. Ponlo en `config.yaml` y te la ahorras.
+
+X usa **OAuth 1.0a**, que firma cada petición con las cuatro credenciales en
+vez de exigir el paseo por el navegador de OAuth 2.0 con PKCE. La firma está
+implementada en `jarvis/sources/oauth1.py` (biblioteca estándar, cuarenta
+líneas) y contrastada contra oauthlib: las firmas de esa comparación están
+fijadas como vectores en `tests/test_oauth1.py`.
+
+Las cuatro redes son de solo lectura y no publican nada. En Bluesky y en
+Reddit el token de acceso caduca (minutos y una hora respectivamente), así que
+Jarvis pide uno nuevo en cada sincronización en vez de guardarlo.
+
+Cada fuente se sincroniza en su propia tarea: `sources.interval_minutes` fija
+el ritmo general y una fuente puede llevar el suyo (`interval_minutes` dentro
+de su bloque), que es lo que le conviene a X.
 
 El buzón se abre en modo lectura y se usa `PEEK`: Jarvis no marca nada como
 leído ni mueve nada de sitio.
@@ -360,7 +401,9 @@ jarvis/
 │   │   ├── email_imap.py   # correo en solo lectura
 │   │   ├── bluesky.py      # línea temporal de Bluesky
 │   │   ├── mastodon.py     # línea temporal de Mastodon
-│   │   └── reddit.py       # portada o subreddits elegidos
+│   │   ├── reddit.py       # portada o subreddits elegidos
+│   │   ├── x_twitter.py    # línea temporal de X (de pago)
+│   │   └── oauth1.py       # firma OAuth 1.0a, que es lo que X acepta
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
 │   │   ├── claude.py       # ★ streaming + bucle de herramientas

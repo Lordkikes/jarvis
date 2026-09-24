@@ -104,6 +104,14 @@ sources:
     subreddits: []         # vacío = tu portada; o ["python", "selfhosted"]
     limit: 40
 
+  x:
+    enabled: false         # ÚNICA fuente de pago: 0,001 $ por publicación leída,
+                           # con deduplicación por día UTC (releerla hoy no cuesta)
+    user_id: ""            # tu id numérico; si lo dejas vacío Jarvis lo pregunta
+                           # una vez por ciclo, y esa consulta también se cobra
+    limit: 40              # publicaciones por sincronización (5-100)
+    interval_minutes: 60   # más espaciado que el resto: cuesta dinero
+
   email:
     enabled: false         # ponlo a true cuando tengas las credenciales
     host: imap.gmail.com   # Gmail necesita una contraseña de aplicación

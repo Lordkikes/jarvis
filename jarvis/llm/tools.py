@@ -107,7 +107,7 @@ class Toolbox:
             "name": "buscar_en_mis_fuentes",
             "description": "Busca en lo que Jarvis tiene indexado: correos, "
                            "sesiones de Claude Code y publicaciones de Bluesky, "
-                           "Mastodon y Reddit. Úsala cuando pregunten por algo que "
+                           "Mastodon, Reddit y X. Úsala cuando pregunten por algo que "
                            "pasó, alguien que escribió o publicó, o en qué se "
                            "estuvo trabajando.",
             "input_schema": {
@@ -117,7 +117,7 @@ class Toolbox:
                                  "description": "Palabras clave, no una frase entera"},
                     "fuente": {"type": "string",
                                "enum": ["correo", "claude_code", "bluesky",
-                                        "mastodon", "reddit"],
+                                        "mastodon", "reddit", "x"],
                                "description": "Opcional, para acotar"},
                     "limite": {"type": "integer", "default": 5, "maximum": 15},
                 },
@@ -143,13 +143,13 @@ class Toolbox:
         },
         {
             "name": "publicaciones_recientes",
-            "description": "Últimas publicaciones indexadas de Bluesky, Mastodon "
-                           "y Reddit.",
+            "description": "Últimas publicaciones indexadas de Bluesky, Mastodon, "
+                           "Reddit y X.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "red": {"type": "string",
-                            "enum": ["bluesky", "mastodon", "reddit"],
+                            "enum": ["bluesky", "mastodon", "reddit", "x"],
                             "description": "Opcional; si no, todas"},
                     "limite": {"type": "integer", "default": 5, "maximum": 15},
                 },
@@ -363,9 +363,9 @@ class Toolbox:
         if red := args.get("red"):
             rows = self.store.recent(source=red, limit=limite)
         else:
-            # Las tres redes mezcladas y ordenadas por fecha.
+            # Las cuatro redes mezcladas y ordenadas por fecha.
             rows = sorted(
-                (row for red in ("bluesky", "mastodon", "reddit")
+                (row for red in ("bluesky", "mastodon", "reddit", "x")
                  for row in self.store.recent(source=red, limit=limite)),
                 key=lambda row: row.get("created_at") or "", reverse=True,
             )[:limite]
