@@ -226,7 +226,7 @@ wakeword` es el plan B infalible: solo le corta oír «Hey Jarvis».
 ### Lo que lee de ti
 
 Jarvis indexa en segundo plano lo que le dejes ver y luego responde desde ese
-índice, no saliendo a la red en mitad de la frase. Hoy hay seis fuentes:
+índice, no saliendo a la red en mitad de la frase. Hoy hay siete fuentes:
 
 | Fuente | Qué indexa | Coste |
 |---|---|---|
@@ -236,6 +236,7 @@ Jarvis indexa en segundo plano lo que le dejes ver y luego responde desde ese
 | **Mastodon** | Tu línea temporal de inicio | 0 €, API abierta |
 | **Reddit** | Tu portada, o los subreddits que elijas | 0 € para uso personal |
 | **X** | Tu línea temporal cronológica | **De pago**: 0,001 $ por publicación distinta y día |
+| **RSS / Atom** | Los blogs y las webs de noticias que sigas | 0 €, y no pide credenciales |
 
 Preguntas que ya entiende: *«¿qué estuve haciendo ayer en el proyecto del
 cliente?»*, *«¿me ha escrito alguien sobre la factura?»*, *«resúmeme los
@@ -334,13 +335,38 @@ implementada en `jarvis/sources/oauth1.py` (biblioteca estándar, cuarenta
 líneas) y contrastada contra oauthlib: las firmas de esa comparación están
 fijadas como vectores en `tests/test_oauth1.py`.
 
-Las cuatro redes son de solo lectura y no publican nada. En Bluesky y en
+RSS no pide credenciales de ningún tipo: es la única fuente que se activa
+pegando URLs y ya.
+
+```yaml
+sources:
+  rss:
+    enabled: true
+    feeds:
+      - https://un.blog/feed.xml
+      - https://una.web/de/noticias/atom
+    limit: 40              # entradas por feed y sincronización
+    interval_minutes: 30
+```
+
+Entiende los tres formatos que circulan —RSS 2.0, RSS 1.0 (RDF) y Atom— y usa
+GET condicional: guarda el `ETag` de cada feed, así que en la mayoría de los
+ciclos el servidor contesta `304` y no hay nada que descargar ni parsear.
+
+> **Leer XML ajeno tiene truco.** `xml.etree.ElementTree` expande las entidades
+> internas, así que un feed hostil podría reventar la memoria con una «billion
+> laughs». No resuelve entidades externas —no hay lectura de ficheros—, pero la
+> bomba sí es real: si el prólogo declara un DTD, Jarvis descarta el documento
+> entero, y además corta cualquier feed que pase de 5 MB.
+
+Las cuatro redes sociales son de solo lectura y no publican nada. En Bluesky y en
 Reddit el token de acceso caduca (minutos y una hora respectivamente), así que
 Jarvis pide uno nuevo en cada sincronización en vez de guardarlo.
 
 Cada fuente se sincroniza en su propia tarea: `sources.interval_minutes` fija
 el ritmo general y una fuente puede llevar el suyo (`interval_minutes` dentro
-de su bloque), que es lo que le conviene a X.
+de su bloque). X lo usa porque cuesta dinero, y RSS porque un blog no publica
+cada cuarto de hora.
 
 El buzón se abre en modo lectura y se usa `PEEK`: Jarvis no marca nada como
 leído ni mueve nada de sitio.
@@ -358,7 +384,7 @@ texto que cualquiera puede enviarte. Por eso:
 - Lo que sale del índice se entrega vallado entre marcas de `DATOS EXTERNOS`,
   y la personalidad del sistema dice explícitamente que eso es información,
   nunca instrucciones.
-- En un turno donde Jarvis **ha leído** cualquiera de las seis fuentes, la
+- En un turno donde Jarvis **ha leído** cualquiera de las siete fuentes, la
   herramienta `abrir` se bloquea. Si quieres que abra algo, pídeselo en una
   frase aparte.
 - `tools.allow_system: false` desactiva de golpe abrir aplicaciones y URLs.
@@ -375,9 +401,9 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 - Informar del estado del equipo (CPU, memoria, disco).
 - Abrir webs y aplicaciones.
 - Buscar en internet (búsqueda web del lado del servidor de Anthropic).
-- Buscar en sus seis fuentes indexadas y resumir lo que encuentre: correos
-  recientes, sesiones de Claude Code y publicaciones de Bluesky, Mastodon,
-  Reddit y X.
+- Buscar en sus siete fuentes indexadas y resumir lo que encuentre: correos
+  recientes, sesiones de Claude Code, publicaciones de Bluesky, Mastodon,
+  Reddit y X, y artículos de los feeds que sigas.
 
 ---
 
@@ -407,7 +433,8 @@ jarvis/
 │   │   ├── mastodon.py     # línea temporal de Mastodon
 │   │   ├── reddit.py       # portada o subreddits elegidos
 │   │   ├── x_twitter.py    # línea temporal de X (de pago)
-│   │   └── oauth1.py       # firma OAuth 1.0a, que es lo que X acepta
+│   │   ├── oauth1.py       # firma OAuth 1.0a, que es lo que X acepta
+│   │   └── rss.py          # feeds RSS 2.0, RSS 1.0 y Atom
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
 │   │   ├── claude.py       # ★ streaming + bucle de herramientas
@@ -614,9 +641,8 @@ La caché del prompt reduce bastante la entrada en conversaciones largas.
 
 Ideas para seguir construyendo, más o menos por dificultad:
 
-1. **Más fuentes**: las seis actuales cubren correo, código y redes; lo
-   siguiente sería RSS. LinkedIn seguirá fuera mientras no abra una API para
-   cuentas personales.
+1. **Más fuentes**: las siete actuales cubren correo, código, redes y feeds.
+   LinkedIn seguirá fuera mientras no abra una API para cuentas personales.
 2. **Más herramientas**: domótica, calendario, control de música.
 3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
 4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.

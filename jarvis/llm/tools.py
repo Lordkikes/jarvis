@@ -106,8 +106,9 @@ class Toolbox:
         {
             "name": "buscar_en_mis_fuentes",
             "description": "Busca en lo que Jarvis tiene indexado: correos, "
-                           "sesiones de Claude Code y publicaciones de Bluesky, "
-                           "Mastodon, Reddit y X. Úsala cuando pregunten por algo que "
+                           "sesiones de Claude Code, publicaciones de Bluesky, "
+                           "Mastodon, Reddit y X, y artículos de tus feeds. Úsala "
+                           "cuando pregunten por algo que "
                            "pasó, alguien que escribió o publicó, o en qué se "
                            "estuvo trabajando.",
             "input_schema": {
@@ -117,7 +118,7 @@ class Toolbox:
                                  "description": "Palabras clave, no una frase entera"},
                     "fuente": {"type": "string",
                                "enum": ["correo", "claude_code", "bluesky",
-                                        "mastodon", "reddit", "x"],
+                                        "mastodon", "reddit", "x", "rss"],
                                "description": "Opcional, para acotar"},
                     "limite": {"type": "integer", "default": 5, "maximum": 15},
                 },
@@ -153,6 +154,15 @@ class Toolbox:
                             "description": "Opcional; si no, todas"},
                     "limite": {"type": "integer", "default": 5, "maximum": 15},
                 },
+            },
+        },
+        {
+            "name": "articulos_recientes",
+            "description": "Lo último publicado en los feeds RSS o Atom que "
+                           "sigues: blogs, noticias, notas de versión.",
+            "input_schema": {
+                "type": "object",
+                "properties": {"limite": {"type": "integer", "default": 5, "maximum": 15}},
             },
         },
         {
@@ -210,7 +220,8 @@ class Toolbox:
             hidden |= {"abrir", "estado_del_sistema"}
         if self.store is None:
             hidden |= {"buscar_en_mis_fuentes", "correos_recientes",
-                       "sesiones_recientes", "publicaciones_recientes"}
+                       "sesiones_recientes", "publicaciones_recientes",
+                       "articulos_recientes"}
         specs = [dict(spec) for spec in self.SPECS if spec["name"] not in hidden]
         if self.cfg.get("llm.web_search", False):
             # Herramienta del lado del servidor: la ejecuta la API, no nosotros.
@@ -357,6 +368,12 @@ class Toolbox:
                 f" · {meta.get('peticiones', 0)} peticiones"
                 f"\n    {row.get('title', '')}")
         return self._external("\n".join(lines))
+
+    def _tool_articulos_recientes(self, args: dict) -> str:
+        rows = self.store.recent(source="rss", limit=min(15, int(args.get("limite", 5))))
+        if not rows:
+            return "No hay artículos indexados. ¿Has puesto feeds en config.yaml?"
+        return self._external(self._format(rows))
 
     def _tool_publicaciones_recientes(self, args: dict) -> str:
         limite = min(15, int(args.get("limite", 5)))
