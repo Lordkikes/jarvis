@@ -181,6 +181,31 @@ class Toolbox:
             },
         },
         {
+            "name": "crear_cita",
+            "description": (
+                "Crea una cita en el calendario. Va en dos pasos: la primera "
+                "llamada NO crea nada, solo devuelve la cita en limpio para "
+                "que se la leas a la persona tal cual; si dice que sí, vuelve "
+                "a llamar con los mismos datos y `confirmar` en true. No "
+                "pongas `confirmar` en true por tu cuenta."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "titulo": {"type": "string"},
+                    "inicio": {"type": "string",
+                               "description": "Fecha y hora locales en ISO 8601, "
+                                              "p. ej. 2026-09-29T17:00"},
+                    "duracion_minutos": {"type": "integer", "default": 60},
+                    "lugar": {"type": "string"},
+                    "descripcion": {"type": "string"},
+                    "confirmar": {"type": "boolean", "default": False,
+                                  "description": "Solo true si la persona ya "
+                                                 "ha dicho que sí"},
+                },
+                "required": ["titulo", "inicio"],
+            },
+        },
+        {
             "name": "estado_del_sistema",
             "description": "CPU, memoria y disco del equipo donde corre Jarvis.",
             "input_schema": {"type": "object", "properties": {}},
@@ -199,11 +224,15 @@ class Toolbox:
         },
     ]
 
-    def __init__(self, cfg, bus, on_announce=None, store=None):
+    def __init__(self, cfg, bus, on_announce=None, store=None, calendar=None):
         self.cfg = cfg
         self.bus = bus
         self.on_announce = on_announce  # callback para hablar (temporizadores)
         self.store = store              # índice de correos y sesiones
+        self.calendar = calendar        # fuente de calendario, para crear citas
+        # Cita propuesta y pendiente de que la persona diga que sí. Ver
+        # `_tool_crear_cita`: la confirmación la exige el código, no el modelo.
+        self._cita_pendiente: dict | None = None
         # Se pone a True en cuanto el turno lee algo de fuera. Ver `_external`.
         self.external_content_seen = False
         self.allow_system = bool(cfg.get("tools.allow_system", True))
@@ -231,6 +260,8 @@ class Toolbox:
     # -- esquemas ----------------------------------------------------------
     def definitions(self) -> list[dict]:
         hidden = set()
+        if not getattr(self.calendar, "allow_write", False):
+            hidden.add("crear_cita")
         if not self.allow_system:
             hidden |= {"abrir", "estado_del_sistema"}
         if self.store is None:
@@ -418,6 +449,80 @@ class Toolbox:
         if not rows:
             return "No hay publicaciones indexadas. ¿Están activadas las redes en config.yaml?"
         return self._external(self._format(rows))
+
+    # -- escribir en el calendario -----------------------------------------
+    DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+    MESES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+             "agosto", "septiembre", "octubre", "noviembre", "diciembre")
+
+    def _en_palabras(self, titulo: str, inicio: datetime, minutos: int) -> str:
+        """La cita dicha como la diría una persona, para leerla en voz alta."""
+        return (f"«{titulo}» el "
+                f"{self.DIAS[inicio.weekday()]} {inicio.day} de "
+                f"{self.MESES[inicio.month - 1]} a las {inicio:%H:%M}"
+                f", {minutos} minutos")
+
+    def _tool_crear_cita(self, args: dict) -> str:
+        if not getattr(self.calendar, "allow_write", False):
+            return ("No puedo crear citas: hace falta CalDAV configurado y con "
+                    "escritura permitida. Una URL .ics es de solo lectura.")
+
+        titulo = (args.get("titulo") or "").strip()
+        if not titulo:
+            return "¿Cómo se llama la cita?"
+
+        try:
+            # `fromisoformat` no admite la Z; una hora local no la lleva.
+            inicio = datetime.fromisoformat((args.get("inicio") or "").strip())
+        except ValueError:
+            return ("No entiendo esa fecha. Dámela en ISO 8601, "
+                    "por ejemplo 2026-09-29T17:00.")
+        if inicio.tzinfo is None:
+            inicio = inicio.astimezone()   # hora local del equipo
+
+        minutos = max(1, min(24 * 60, int(args.get("duracion_minutos", 60) or 60)))
+        propuesta = {
+            "titulo": titulo,
+            "inicio": inicio.isoformat(timespec="minutes"),
+            "minutos": minutos,
+            "lugar": (args.get("lugar") or "").strip(),
+            "descripcion": (args.get("descripcion") or "").strip(),
+        }
+
+        # Primer paso, o datos distintos de los ya propuestos: no se escribe
+        # nada. La persona tiene que oír exactamente lo que se va a crear.
+        if not args.get("confirmar") or self._cita_pendiente != propuesta:
+            self._cita_pendiente = propuesta
+            aviso = ""
+            if inicio < datetime.now().astimezone():
+                aviso = " OJO: esa fecha ya ha pasado."
+            return (f"Sin crear todavía. Léeselo tal cual y pregunta si lo creo: "
+                    f"{self._en_palabras(titulo, inicio, minutos)}."
+                    f"{' En ' + propuesta['lugar'] + '.' if propuesta['lugar'] else ''}"
+                    f"{aviso}")
+
+        # Segundo paso: ya dijo que sí. Misma cautela que con `abrir`.
+        if self.external_content_seen:
+            self._cita_pendiente = None
+            return ("No creo la cita: en este turno he leído contenido de "
+                    "fuera, y eso podría estar dictándome lo que escribo. "
+                    "Pídemelo otra vez en una frase aparte.")
+
+        fin = inicio + timedelta(minutes=minutos)
+        resultado = self.calendar.create_event(
+            titulo, inicio, fin, propuesta["lugar"], propuesta["descripcion"])
+        self._cita_pendiente = None
+        if not resultado.get("ok"):
+            return f"No he podido crear la cita: {resultado.get('motivo', '?')}"
+
+        if self.store is not None:
+            try:
+                self.calendar.index_event(self.store, resultado["ics"], inicio, fin)
+            except Exception:  # noqa: BLE001 - si falla, entrará en el próximo ciclo
+                log.exception("la cita se creó pero no se pudo indexar")
+        self.bus.emit("sync", source="calendario", nuevos=1)
+        return (f"Creada: {titulo}, el {inicio:%d/%m} a las {inicio:%H:%M}, "
+                f"{minutos} minutos.")
 
     def _tool_estado_del_sistema(self, args: dict) -> str:  # noqa: ARG002
         try:

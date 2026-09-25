@@ -13,19 +13,25 @@ Dos maneras de conectarlo, según lo que dé tu proveedor:
 Las repeticiones se expanden aquí (ver `rrule.py`) en vez de pedirle al
 servidor que lo haga: así el resultado es el mismo por las dos vías, y no
 depende de que el servidor implemente `<C:expand>`.
+
+Crear citas solo funciona por CalDAV: una URL `.ics` es un fichero que se
+descarga, no un sitio donde escribir. La creación es un `PUT` del evento en
+un recurso nuevo, con `If-None-Match: *` para que el servidor rechace la
+petición si ese recurso ya existiera en vez de pisarlo.
 """
 from __future__ import annotations
 
 import logging
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
 
 from . import Item
 from .ical import (
-    datetime_of, duration_of, is_all_day, parse_dt, parse_events, unescape,
-    value_of,
+    build_event, datetime_of, duration_of, is_all_day, parse_dt, parse_events,
+    unescape, value_of,
 )
 from .rrule import expand, is_supported, parse_rrule
 from ..http import Client
@@ -146,7 +152,8 @@ class CalendarSource:
 
     def __init__(self, caldav_url: str = "", caldav_user: str = "",
                  ics: list | None = None, days_ahead: int = 60,
-                 days_back: int = 7, interval_minutes: int = 0):
+                 days_back: int = 7, interval_minutes: int = 0,
+                 allow_write: bool = True):
         self.caldav_url = (caldav_url or "").rstrip("/")
         self.caldav_user = caldav_user or ""
         self.caldav_password = os.getenv("JARVIS_CALDAV_PASSWORD", "")
@@ -159,6 +166,8 @@ class CalendarSource:
             raise RuntimeError(
                 "falta sources.calendar.caldav.user en config.yaml o "
                 "JARVIS_CALDAV_PASSWORD en .env")
+        # Escribir solo tiene sentido por CalDAV, y solo si se permite.
+        self.allow_write = bool(allow_write) and bool(self.caldav_url)
         self.days_ahead = max(1, days_ahead)
         self.days_back = max(0, days_back)
         self.interval_minutes = interval_minutes
@@ -194,6 +203,58 @@ class CalendarSource:
             return []
         nombre = urlsplit(url).netloc or "ics"
         return event_items(response.text, nombre, desde, hasta, url)
+
+    def create_event(self, titulo: str, inicio: datetime, fin: datetime,
+                     lugar: str = "", descripcion: str = "") -> dict:
+        """Crea una cita por CalDAV. Devuelve qué pasó, sin lanzar excepciones.
+
+        No hay reintentos a propósito: si algo sale mal, es preferible decirlo
+        y que la persona decida, antes que arriesgarse a crear la cita dos
+        veces en un calendario de verdad.
+        """
+        if not self.allow_write:
+            return {"ok": False, "motivo": (
+                "crear citas necesita CalDAV configurado y con escritura "
+                "permitida; una URL .ics es de solo lectura")}
+
+        uid = f"{uuid.uuid4()}@jarvis"
+        cuerpo = build_event(uid, inicio, fin, titulo, lugar, descripcion)
+        url = f"{self.caldav_url}/{uid}.ics"
+        try:
+            with Client(timeout=30.0, follow_redirects=True) as client:
+                response = client.put(
+                    url, content=cuerpo.encode(),
+                    headers={"Content-Type": 'text/calendar; charset="utf-8"',
+                             # El recurso tiene que ser nuevo: si existiera,
+                             # que falle en vez de pisar lo que hubiera.
+                             "If-None-Match": "*"},
+                    auth=(self.caldav_user, self.caldav_password),
+                )
+        except Exception as exc:  # noqa: BLE001 - la red falla; hay que contarlo
+            log.warning("no se pudo crear la cita (%s)", exc)
+            return {"ok": False, "motivo": f"no se pudo hablar con el servidor: {exc}"}
+
+        if response.status_code in (200, 201, 204):
+            log.info("cita creada: %s (%s)", titulo, uid)
+            return {"ok": True, "uid": uid, "url": url, "ics": cuerpo}
+        if response.status_code == 412:
+            return {"ok": False, "motivo": "ya existe un evento con ese identificador"}
+        log.error("el servidor rechazó la cita (%s): %s",
+                  response.status_code, response.text[:160])
+        return {"ok": False,
+                "motivo": f"el servidor respondió {response.status_code}"}
+
+    def index_event(self, store, ics: str, inicio: datetime, fin: datetime) -> int:
+        """Mete en el índice lo que se acaba de crear, sin esperar al siguiente ciclo.
+
+        La ventana se ensancha hasta abarcar la cita: si alguien pone algo
+        para dentro de un año, tiene que constar igual.
+        """
+        desde, hasta = self.ventana()
+        nombre = self.caldav_url.rstrip("/").rsplit("/", 1)[-1] or "calendario"
+        return store.upsert(event_items(
+            ics, nombre, min(desde, inicio), max(hasta, fin + timedelta(seconds=1)),
+            self.caldav_url))
 
     def sync(self, store) -> int:
         desde, hasta = self.ventana()

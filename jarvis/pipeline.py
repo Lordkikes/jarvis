@@ -42,7 +42,9 @@ class Jarvis:
         self._busy = asyncio.Lock()
 
         self.store, self.sources = self._make_index(cfg)
-        self.toolbox = Toolbox(cfg, bus, on_announce=self._announce, store=self.store)
+        self.toolbox = Toolbox(cfg, bus, on_announce=self._announce, store=self.store,
+                               calendar=next((s for s in self.sources
+                                              if s.name == "calendario"), None))
         self.brain = Brain(cfg, self.toolbox)
         self.stt = make_stt(cfg)
         self.tts = make_tts(cfg)
