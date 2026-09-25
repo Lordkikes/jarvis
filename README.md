@@ -358,8 +358,9 @@ texto que cualquiera puede enviarte. Por eso:
 - Lo que sale del índice se entrega vallado entre marcas de `DATOS EXTERNOS`,
   y la personalidad del sistema dice explícitamente que eso es información,
   nunca instrucciones.
-- En un turno donde Jarvis **ha leído** correo o sesiones, la herramienta
-  `abrir` se bloquea. Si quieres que abra algo, pídeselo en una frase aparte.
+- En un turno donde Jarvis **ha leído** cualquiera de las seis fuentes, la
+  herramienta `abrir` se bloquea. Si quieres que abra algo, pídeselo en una
+  frase aparte.
 - `tools.allow_system: false` desactiva de golpe abrir aplicaciones y URLs.
 
 Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
@@ -374,6 +375,9 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 - Informar del estado del equipo (CPU, memoria, disco).
 - Abrir webs y aplicaciones.
 - Buscar en internet (búsqueda web del lado del servidor de Anthropic).
+- Buscar en sus seis fuentes indexadas y resumir lo que encuentre: correos
+  recientes, sesiones de Claude Code y publicaciones de Bluesky, Mastodon,
+  Reddit y X.
 
 ---
 
@@ -610,8 +614,9 @@ La caché del prompt reduce bastante la entrada en conversaciones largas.
 
 Ideas para seguir construyendo, más o menos por dificultad:
 
-1. **Más fuentes**: X cobra por uso desde 2026, pero leer *tus propios datos*
-   («Owned Reads») sale por céntimos al mes.
+1. **Más fuentes**: las seis actuales cubren correo, código y redes; lo
+   siguiente sería RSS. LinkedIn seguirá fuera mientras no abra una API para
+   cuentas personales.
 2. **Más herramientas**: domótica, calendario, control de música.
 3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
 4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.
