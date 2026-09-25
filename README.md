@@ -239,6 +239,9 @@ Jarvis indexa en segundo plano lo que le dejes ver y luego responde desde ese
 | **RSS / Atom** | Los blogs y las webs de noticias que sigas | 0 €, y no pide credenciales |
 | **Calendario** | Tus citas, con las repeticiones ya expandidas | 0 €, por CalDAV o por URL `.ics` |
 
+El calendario es además la única fuente en la que Jarvis **escribe**: puede
+crear citas, con una confirmación hablada de por medio (más abajo).
+
 Preguntas que ya entiende: *«¿qué estuve haciendo ayer en el proyecto del
 cliente?»*, *«¿me ha escrito alguien sobre la factura?»*, *«resúmeme los
 correos de hoy»*, *«¿qué se está diciendo en Bluesky?»*, *«¿qué tengo esta
@@ -400,6 +403,37 @@ autenticación básica de CalDAV y hoy exige OAuth 2.0.
 > —`BYSETPOS` y compañía— **se detecta y se marca**: de ese evento solo consta
 > la primera aparición, y el índice lo dice en vez de inventarse fechas.
 
+#### Crear citas
+
+Jarvis puede crear citas, y es lo único que escribe en algún sitio. Eso cambia
+lo que está en juego: una hora mal entendida por el micrófono se convierte en
+una reunión real a las cinco de la mañana. Por eso la creación va **en dos
+pasos, y los impone el código, no el buen criterio del modelo**:
+
+1. La primera llamada no manda nada al servidor. Devuelve la cita en limpio
+   —«*Dentista* el martes 29 de septiembre a las 17:00, 30 minutos»— para que
+   Jarvis te la lea tal cual.
+2. Solo si vuelve a llamar con **los mismos datos** y tu confirmación se hace
+   el `PUT`. Si algo cambió entre medias, vuelve al paso uno y te lo lee otra
+   vez.
+
+Un modelo que intente confirmar por su cuenta en la primera llamada no crea
+nada: el código no encuentra una propuesta previa que coincida y le devuelve
+la lectura. Y una confirmación no sirve dos veces.
+
+Además, **no se escribe en un turno donde Jarvis haya leído contenido externo**,
+igual que pasa con `abrir`. Mirar la agenda y *proponerte* una cita sí está
+permitido; lo que se frena es escribir en el mismo turno en el que un correo
+podría estar dictándola.
+
+El `PUT` va con `If-None-Match: *`, así que si el recurso ya existiera el
+servidor rechaza la petición en vez de pisar lo que hubiera. Y si algo falla,
+**no hay reintento**: es preferible contártelo a arriesgarse a crear la cita
+dos veces. Crear solo funciona por CalDAV; una URL `.ics` es un fichero que se
+descarga, no un sitio donde escribir.
+
+Para apagarlo del todo, `sources.calendar.caldav.allow_write: false`.
+
 Las cuatro redes sociales son de solo lectura y no publican nada. En Bluesky y en
 Reddit el token de acceso caduca (minutos y una hora respectivamente), así que
 Jarvis pide uno nuevo en cada sincronización en vez de guardarlo.
@@ -446,6 +480,7 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
   recientes, sesiones de Claude Code, publicaciones de Bluesky, Mastodon,
   Reddit y X, y artículos de los feeds que sigas.
 - Contarte la agenda: qué tienes ahora, hoy o esta semana.
+- Crear citas en el calendario, leyéndotelas antes y esperando tu «sí».
 
 ---
 
@@ -478,7 +513,7 @@ jarvis/
 │   │   ├── oauth1.py       # firma OAuth 1.0a, que es lo que X acepta
 │   │   ├── rss.py          # feeds RSS 2.0, RSS 1.0 y Atom
 │   │   ├── calendar_dav.py # calendario por CalDAV o por .ics
-│   │   ├── ical.py         # ★ lector de iCalendar (RFC 5545)
+│   │   ├── ical.py         # ★ lector y escritor de iCalendar (RFC 5545)
 │   │   └── rrule.py        # ★ expansión de repeticiones
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
@@ -689,8 +724,8 @@ Ideas para seguir construyendo, más o menos por dificultad:
 1. **Más fuentes**: las ocho actuales cubren correo, código, redes, feeds y
    calendario. LinkedIn seguirá fuera mientras no abra una API para cuentas
    personales.
-2. **Más herramientas**: domótica, control de música, y *crear* citas además
-   de leerlas (hoy el calendario es de solo lectura).
+2. **Más herramientas**: domótica, control de música, y mover o cancelar
+   citas además de crearlas.
 3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
 4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.
 5. **Acceso desde el móvil**: exponer el servidor en la red local (`server.host: 0.0.0.0`) — hazlo solo en redes de confianza, no hay autenticación.

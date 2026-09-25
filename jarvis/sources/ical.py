@@ -1,4 +1,4 @@
-"""Lector de iCalendar (RFC 5545), con la biblioteca estándar.
+"""Lector y escritor de iCalendar (RFC 5545), con la biblioteca estándar.
 
 Se implementa aquí en vez de traer `icalendar` + `dateutil` porque lo que
 Jarvis necesita es un subconjunto pequeño y bien delimitado: leer los VEVENT
@@ -194,3 +194,73 @@ def parse_duration(value: str) -> timedelta:
                       hours=partes.get("horas", 0), minutes=partes.get("minutos", 0),
                       seconds=partes.get("segundos", 0))
     return -delta if encaje.group("signo") == "-" else delta
+
+
+# -- escritura --------------------------------------------------------------
+# Al escribir hay que deshacer las mismas trampas, en el otro sentido. La del
+# plegado tiene un detalle que se escapa fácil: el límite son 75 **octetos**,
+# no caracteres, y una «ñ» ocupa dos. Partir por caracteres genera ficheros
+# que algunos servidores rechazan y otros truncan.
+MAX_OCTETOS = 75
+
+
+def escape(value: str) -> str:
+    """El inverso de `unescape`: prepara un texto para meterlo en una línea."""
+    return (str(value or "")
+            .replace("\\", "\\\\")
+            .replace("\n", "\\n").replace("\r", "")
+            .replace(",", "\\,").replace(";", "\\;"))
+
+
+def fold(line: str) -> str:
+    """Pliega una línea larga sin partir ningún carácter por la mitad."""
+    crudo = line.encode()
+    if len(crudo) <= MAX_OCTETOS:
+        return line
+
+    trozos, actual = [], ""
+    # El primer trozo admite 75 octetos; los siguientes, uno menos, porque
+    # empiezan por el espacio que los marca como continuación.
+    tope = MAX_OCTETOS
+    for caracter in line:
+        if len((actual + caracter).encode()) > tope:
+            trozos.append(actual)
+            actual, tope = caracter, MAX_OCTETOS - 1
+        else:
+            actual += caracter
+    trozos.append(actual)
+    return "\r\n ".join(trozos)
+
+
+def format_dt(fecha: datetime) -> str:
+    """Un datetime a la forma UTC de iCalendar: `20260925T100000Z`."""
+    return fecha.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def build_event(uid: str, inicio: datetime, fin: datetime, summary: str,
+                location: str = "", description: str = "",
+                prodid: str = "-//jarvis//asistente//ES") -> str:
+    """Un VCALENDAR de un solo evento, listo para mandar por CalDAV.
+
+    Las fechas van en UTC a propósito: así el fichero no depende de que el
+    servidor conozca el mismo huso horario que nosotros, ni hay que arrastrar
+    un VTIMEZONE completo para que sea válido.
+    """
+    lineas = [
+        "BEGIN:VCALENDAR",
+        f"PRODID:{prodid}",
+        "VERSION:2.0",
+        "CALSCALE:GREGORIAN",
+        "BEGIN:VEVENT",
+        f"UID:{escape(uid)}",
+        f"DTSTAMP:{format_dt(datetime.now(timezone.utc))}",
+        f"DTSTART:{format_dt(inicio)}",
+        f"DTEND:{format_dt(fin)}",
+        f"SUMMARY:{escape(summary)}",
+    ]
+    if location:
+        lineas.append(f"LOCATION:{escape(location)}")
+    if description:
+        lineas.append(f"DESCRIPTION:{escape(description)}")
+    lineas += ["END:VEVENT", "END:VCALENDAR"]
+    return "\r\n".join(fold(linea) for linea in lineas) + "\r\n"
