@@ -118,6 +118,16 @@ sources:
     limit: 40              # publicaciones por sincronización (5-100)
     interval_minutes: 60   # más espaciado que el resto: cuesta dinero
 
+  calendar:
+    enabled: false         # CalDAV con contraseña, o URLs .ics sueltas
+    caldav:
+      url: ""              # la colección del calendario, no la raíz del servidor
+      user: ""             # con Google no sirve: pide OAuth 2.0, usa su URL .ics
+    ics: []                # ["https://calendar.google.com/.../basic.ics"]
+    days_ahead: 60         # cuánto mirar hacia adelante
+    days_back: 7           # y hacia atrás, para «¿qué tenía ayer?»
+    interval_minutes: 30
+
   email:
     enabled: false         # ponlo a true cuando tengas las credenciales
     host: imap.gmail.com   # Gmail necesita una contraseña de aplicación

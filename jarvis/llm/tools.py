@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ..config import data_path
@@ -107,7 +107,8 @@ class Toolbox:
             "name": "buscar_en_mis_fuentes",
             "description": "Busca en lo que Jarvis tiene indexado: correos, "
                            "sesiones de Claude Code, publicaciones de Bluesky, "
-                           "Mastodon, Reddit y X, y artículos de tus feeds. Úsala "
+                           "Mastodon, Reddit y X, artículos de tus feeds y eventos "
+                           "del calendario. Úsala "
                            "cuando pregunten por algo que "
                            "pasó, alguien que escribió o publicó, o en qué se "
                            "estuvo trabajando.",
@@ -117,8 +118,8 @@ class Toolbox:
                     "consulta": {"type": "string",
                                  "description": "Palabras clave, no una frase entera"},
                     "fuente": {"type": "string",
-                               "enum": ["correo", "claude_code", "bluesky",
-                                        "mastodon", "reddit", "x", "rss"],
+                               "enum": ["correo", "claude_code", "bluesky", "mastodon",
+                                        "reddit", "x", "rss", "calendario"],
                                "description": "Opcional, para acotar"},
                     "limite": {"type": "integer", "default": 5, "maximum": 15},
                 },
@@ -163,6 +164,20 @@ class Toolbox:
             "input_schema": {
                 "type": "object",
                 "properties": {"limite": {"type": "integer", "default": 5, "maximum": 15}},
+            },
+        },
+        {
+            "name": "agenda",
+            "description": "Qué hay en el calendario a partir de ahora: la "
+                           "próxima cita, lo de hoy, lo de esta semana. Usa "
+                           "`dias` para acotar la ventana.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "dias": {"type": "integer", "default": 7, "maximum": 60,
+                             "description": "Cuántos días hacia adelante mirar"},
+                    "limite": {"type": "integer", "default": 10, "maximum": 20},
+                },
             },
         },
         {
@@ -221,7 +236,7 @@ class Toolbox:
         if self.store is None:
             hidden |= {"buscar_en_mis_fuentes", "correos_recientes",
                        "sesiones_recientes", "publicaciones_recientes",
-                       "articulos_recientes"}
+                       "articulos_recientes", "agenda"}
         specs = [dict(spec) for spec in self.SPECS if spec["name"] not in hidden]
         if self.cfg.get("llm.web_search", False):
             # Herramienta del lado del servidor: la ejecuta la API, no nosotros.
@@ -368,6 +383,20 @@ class Toolbox:
                 f" · {meta.get('peticiones', 0)} peticiones"
                 f"\n    {row.get('title', '')}")
         return self._external("\n".join(lines))
+
+    def _tool_agenda(self, args: dict) -> str:
+        dias = max(1, min(60, int(args.get("dias", 7))))
+        ahora = datetime.now(timezone.utc)
+        rows = self.store.upcoming(
+            source="calendario",
+            since=ahora.isoformat(timespec="seconds"),
+            until=(ahora + timedelta(days=dias)).isoformat(timespec="seconds"),
+            limit=min(20, int(args.get("limite", 10))),
+        )
+        if not rows:
+            return (f"No hay nada en el calendario en los próximos {dias} días "
+                    "(o la fuente no está activada en config.yaml).")
+        return self._external(self._format(rows))
 
     def _tool_articulos_recientes(self, args: dict) -> str:
         rows = self.store.recent(source="rss", limit=min(15, int(args.get("limite", 5))))

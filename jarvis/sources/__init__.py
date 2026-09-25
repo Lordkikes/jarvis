@@ -120,6 +120,21 @@ def make_sources(cfg) -> list:
         except Exception as exc:  # noqa: BLE001
             log.warning("fuente 'x' no disponible (%s)", exc)
 
+    if cfg.get("sources.calendar.enabled", False):
+        try:
+            from .calendar_dav import CalendarSource
+
+            sources.append(CalendarSource(
+                caldav_url=cfg.get("sources.calendar.caldav.url", ""),
+                caldav_user=cfg.get("sources.calendar.caldav.user", ""),
+                ics=cfg.get("sources.calendar.ics", []),
+                days_ahead=int(cfg.get("sources.calendar.days_ahead", 60)),
+                days_back=int(cfg.get("sources.calendar.days_back", 7)),
+                interval_minutes=int(cfg.get("sources.calendar.interval_minutes", 0)),
+            ))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("fuente 'calendario' no disponible (%s)", exc)
+
     if cfg.get("sources.email.enabled", False):
         try:
             from .email_imap import EmailSource

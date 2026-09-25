@@ -226,7 +226,7 @@ wakeword` es el plan B infalible: solo le corta oír «Hey Jarvis».
 ### Lo que lee de ti
 
 Jarvis indexa en segundo plano lo que le dejes ver y luego responde desde ese
-índice, no saliendo a la red en mitad de la frase. Hoy hay siete fuentes:
+índice, no saliendo a la red en mitad de la frase. Hoy hay ocho fuentes:
 
 | Fuente | Qué indexa | Coste |
 |---|---|---|
@@ -237,10 +237,12 @@ Jarvis indexa en segundo plano lo que le dejes ver y luego responde desde ese
 | **Reddit** | Tu portada, o los subreddits que elijas | 0 € para uso personal |
 | **X** | Tu línea temporal cronológica | **De pago**: 0,001 $ por publicación distinta y día |
 | **RSS / Atom** | Los blogs y las webs de noticias que sigas | 0 €, y no pide credenciales |
+| **Calendario** | Tus citas, con las repeticiones ya expandidas | 0 €, por CalDAV o por URL `.ics` |
 
 Preguntas que ya entiende: *«¿qué estuve haciendo ayer en el proyecto del
 cliente?»*, *«¿me ha escrito alguien sobre la factura?»*, *«resúmeme los
-correos de hoy»*, *«¿qué se está diciendo en Bluesky?»*.
+correos de hoy»*, *«¿qué se está diciendo en Bluesky?»*, *«¿qué tengo esta
+semana?»*.
 
 Las sesiones de Claude Code se leen solas de `~/.claude/projects`. El correo
 hay que activarlo:
@@ -359,6 +361,45 @@ ciclos el servidor contesta `304` y no hay nada que descargar ni parsear.
 > bomba sí es real: si el prólogo declara un DTD, Jarvis descarta el documento
 > entero, y además corta cualquier feed que pase de 5 MB.
 
+El calendario se conecta de dos maneras, según lo que dé tu proveedor:
+
+```yaml
+sources:
+  calendar:
+    enabled: true
+    caldav:
+      url: https://caldav.ejemplo.com/calendars/yelko/personal
+      user: yelko
+    ics:
+      - https://calendar.google.com/calendar/ical/.../basic.ics
+    days_ahead: 60
+    days_back: 7           # para «¿qué tenía ayer?»
+```
+
+```bash
+JARVIS_CALDAV_PASSWORD=   # de aplicación, nunca la de tu cuenta
+```
+
+**CalDAV** (iCloud, Fastmail, Nextcloud, Radicale…) quiere la URL de la
+colección del calendario —no la raíz del servidor— más usuario y contraseña.
+Jarvis manda un `REPORT` de tipo `calendar-query` acotado por fechas, así que
+el servidor solo devuelve lo que cae en la ventana.
+
+**`.ics`** es la «URL secreta en formato iCal» de Google Calendar y Outlook:
+un simple GET, sin credenciales. Es **la vía para Google**, que retiró la
+autenticación básica de CalDAV y hoy exige OAuth 2.0.
+
+> **Las repeticiones se expanden aquí**, no en el servidor, para que el
+> resultado sea el mismo por las dos vías. Un standup semanal aparece una sola
+> vez en el fichero, con un `DTSTART` de hace meses; Jarvis genera cada lunes
+> que cae en la ventana. Están cubiertos `FREQ` DAILY, WEEKLY, MONTHLY y
+> YEARLY con `INTERVAL`, `COUNT`, `UNTIL`, `BYDAY` (incluido `3TU` o `-1FR`),
+> `BYMONTHDAY` y `BYMONTH`, más `EXDATE` y `RDATE`. La expansión está
+> contrastada contra `python-dateutil` en quince reglas, y esas cuentas están
+> fijadas como vectores en `tests/test_rrule.py`. Lo que queda fuera
+> —`BYSETPOS` y compañía— **se detecta y se marca**: de ese evento solo consta
+> la primera aparición, y el índice lo dice en vez de inventarse fechas.
+
 Las cuatro redes sociales son de solo lectura y no publican nada. En Bluesky y en
 Reddit el token de acceso caduca (minutos y una hora respectivamente), así que
 Jarvis pide uno nuevo en cada sincronización en vez de guardarlo.
@@ -384,7 +425,7 @@ texto que cualquiera puede enviarte. Por eso:
 - Lo que sale del índice se entrega vallado entre marcas de `DATOS EXTERNOS`,
   y la personalidad del sistema dice explícitamente que eso es información,
   nunca instrucciones.
-- En un turno donde Jarvis **ha leído** cualquiera de las siete fuentes, la
+- En un turno donde Jarvis **ha leído** cualquiera de las ocho fuentes, la
   herramienta `abrir` se bloquea. Si quieres que abra algo, pídeselo en una
   frase aparte.
 - `tools.allow_system: false` desactiva de golpe abrir aplicaciones y URLs.
@@ -401,9 +442,10 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 - Informar del estado del equipo (CPU, memoria, disco).
 - Abrir webs y aplicaciones.
 - Buscar en internet (búsqueda web del lado del servidor de Anthropic).
-- Buscar en sus siete fuentes indexadas y resumir lo que encuentre: correos
+- Buscar en sus ocho fuentes indexadas y resumir lo que encuentre: correos
   recientes, sesiones de Claude Code, publicaciones de Bluesky, Mastodon,
   Reddit y X, y artículos de los feeds que sigas.
+- Contarte la agenda: qué tienes ahora, hoy o esta semana.
 
 ---
 
@@ -434,7 +476,10 @@ jarvis/
 │   │   ├── reddit.py       # portada o subreddits elegidos
 │   │   ├── x_twitter.py    # línea temporal de X (de pago)
 │   │   ├── oauth1.py       # firma OAuth 1.0a, que es lo que X acepta
-│   │   └── rss.py          # feeds RSS 2.0, RSS 1.0 y Atom
+│   │   ├── rss.py          # feeds RSS 2.0, RSS 1.0 y Atom
+│   │   ├── calendar_dav.py # calendario por CalDAV o por .ics
+│   │   ├── ical.py         # ★ lector de iCalendar (RFC 5545)
+│   │   └── rrule.py        # ★ expansión de repeticiones
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
 │   │   ├── claude.py       # ★ streaming + bucle de herramientas
@@ -641,9 +686,11 @@ La caché del prompt reduce bastante la entrada en conversaciones largas.
 
 Ideas para seguir construyendo, más o menos por dificultad:
 
-1. **Más fuentes**: las siete actuales cubren correo, código, redes y feeds.
-   LinkedIn seguirá fuera mientras no abra una API para cuentas personales.
-2. **Más herramientas**: domótica, calendario, control de música.
+1. **Más fuentes**: las ocho actuales cubren correo, código, redes, feeds y
+   calendario. LinkedIn seguirá fuera mientras no abra una API para cuentas
+   personales.
+2. **Más herramientas**: domótica, control de música, y *crear* citas además
+   de leerlas (hoy el calendario es de solo lectura).
 3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
 4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.
 5. **Acceso desde el móvil**: exponer el servidor en la red local (`server.host: 0.0.0.0`) — hazlo solo en redes de confianza, no hay autenticación.
