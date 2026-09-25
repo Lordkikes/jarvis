@@ -104,6 +104,12 @@ sources:
     subreddits: []         # vacío = tu portada; o ["python", "selfhosted"]
     limit: 40
 
+  rss:
+    enabled: false         # la única fuente sin credenciales: pega las URLs
+    feeds: []              # ["https://un.blog/feed.xml", "https://otro/atom"]
+    limit: 40              # entradas por feed y sincronización
+    interval_minutes: 30
+
   x:
     enabled: false         # ÚNICA fuente de pago: 0,001 $ por publicación leída,
                            # con deduplicación por día UTC (releerla hoy no cuesta)

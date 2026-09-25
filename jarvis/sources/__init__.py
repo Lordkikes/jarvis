@@ -96,6 +96,18 @@ def make_sources(cfg) -> list:
         except Exception as exc:  # noqa: BLE001
             log.warning("fuente 'reddit' no disponible (%s)", exc)
 
+    if cfg.get("sources.rss.enabled", False):
+        try:
+            from .rss import RssSource
+
+            sources.append(RssSource(
+                feeds=cfg.get("sources.rss.feeds", []),
+                limit=int(cfg.get("sources.rss.limit", 40)),
+                interval_minutes=int(cfg.get("sources.rss.interval_minutes", 0)),
+            ))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("fuente 'rss' no disponible (%s)", exc)
+
     if cfg.get("sources.x.enabled", False):
         try:
             from .x_twitter import XSource
