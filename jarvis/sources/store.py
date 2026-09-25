@@ -181,6 +181,29 @@ class Store:
         with self._lock:
             return [dict(row) for row in self._conn.execute(sql, params).fetchall()]
 
+    def upcoming(self, source: str | None = None, since: str | None = None,
+                 until: str | None = None, limit: int = 8) -> list[dict]:
+        """Lo que viene, de lo más próximo a lo más lejano.
+
+        `recent` ordena hacia atrás, que es lo que quieren los correos y las
+        publicaciones. Una agenda se lee al revés: lo primero es lo siguiente.
+        """
+        sql = "SELECT * FROM items WHERE 1=1"
+        params: list = []
+        if source:
+            sql += " AND source = ?"
+            params.append(source)
+        if since:
+            sql += " AND created_at >= ?"
+            params.append(since)
+        if until:
+            sql += " AND created_at < ?"
+            params.append(until)
+        sql += " ORDER BY created_at ASC LIMIT ?"
+        params.append(limit)
+        with self._lock:
+            return [dict(row) for row in self._conn.execute(sql, params).fetchall()]
+
     def counts(self) -> dict[str, int]:
         with self._lock:
             rows = self._conn.execute(
