@@ -17,6 +17,9 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from ..alarmas import (
+    Alarmas, dias_en_palabras, parse_dias, parse_hora,
+)
 from ..config import data_path
 from ..domotica import (
     DOMINIOS_DELICADOS, HomeAssistant, SinConexion, dominio_de,
@@ -627,6 +630,78 @@ class Toolbox:
             },
         },
         {
+            "name": "poner_alarma",
+            "description": (
+                "Una alarma para una hora del día, que suena hasta que la "
+                "paren. Para despertarse y poco más: si es un aviso de una "
+                "sola frase usa `poner_recordatorio`, y si es «dentro de N "
+                "minutos», `poner_temporizador`."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "hora": {"type": "string",
+                             "description": "Hora local en 24 h, p. ej. 07:00"},
+                    "dias": {"type": "string",
+                             "description": "«laborables», «fin de semana», "
+                                            "«diario», o los días separados "
+                                            "por comas. Vacío: una sola vez"},
+                    "etiqueta": {"type": "string",
+                                 "description": "Opcional, para qué es"},
+                },
+                "required": ["hora"],
+            },
+        },
+        {
+            "name": "ver_alarmas",
+            "description": "Las alarmas puestas, cuándo suena cada una y si "
+                           "alguna está apagada o se perdió.",
+            "input_schema": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "parar_alarma",
+            "description": (
+                "Calla la alarma que está sonando. Úsala en cuanto diga «para», "
+                "«ya», «cállate» o «cinco minutos más» mientras suena."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "posponer": {"type": "boolean", "default": False,
+                                 "description": "True si quiere que vuelva a "
+                                                "sonar dentro de un rato"},
+                    "minutos": {"type": "integer", "minimum": 1, "maximum": 120,
+                                "description": "Cuánto posponer, si lo dice"},
+                },
+            },
+        },
+        {
+            "name": "encender_alarma",
+            "description": (
+                "Enciende o apaga una alarma sin borrarla, para la semana que "
+                "libra. Di la hora o su etiqueta."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "cual": {"type": "string"},
+                    "encendida": {"type": "boolean"},
+                },
+                "required": ["encendida"],
+            },
+        },
+        {
+            "name": "quitar_alarma",
+            "description": "Borra una alarma. Di la hora o su etiqueta.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "cual": {"type": "string"},
+                    "confirmar": {"type": "boolean", "default": False,
+                                  "description": "True únicamente después de "
+                                                 "que le hayas leído la "
+                                                 "propuesta y haya dicho que sí"},
+                },
+            },
+        },
+        {
             "name": "estado_del_sistema",
             "description": "CPU, memoria y disco del equipo donde corre Jarvis.",
             "input_schema": {"type": "object", "properties": {}},
@@ -685,6 +760,13 @@ class Toolbox:
                                                  "data/scenes.json")))
         self.recordatorios = Recordatorios(
             data_path(cfg.get("tools.reminders_file", "data/reminders.json")))
+        self.alarmas = Alarmas(
+            data_path(cfg.get("tools.alarms_file", "data/alarms.json")),
+            posponer=timedelta(minutes=max(1, int(
+                cfg.get("tools.alarmas.posponer_minutos", 9)))))
+        # Una alarma que suena en casa mientras duermes fuera no despierta a
+        # nadie; el móvil sí, y solo la primera vuelta.
+        self.avisar_alarmas = bool(cfg.get("tools.avisos.alarmas", True))
         # Emisoras y listas con nombre propio: lo que resuelve «pon Radio 3».
         self.favoritos = dict(cfg.get("tools.musica.favoritos", {}) or {})
         self.temporizadores = Temporizadores()
@@ -1084,6 +1166,188 @@ class Toolbox:
             if self.avisos.disponible:
                 await asyncio.to_thread(self.avisos.envia, mensaje, "Recordatorio")
         return len(vencidos)
+
+    # -- alarmas -----------------------------------------------------------
+    def _tool_poner_alarma(self, args: dict) -> str:
+        if self.external_content_seen:
+            # Una alarma diaria a las tres de la mañana la pone un correo una
+            # sola vez y la sufres todas las noches.
+            return ("No pongo alarmas: en este turno he leído contenido de "
+                    "fuera. Pídemelo otra vez en una frase aparte.")
+
+        hora = parse_hora(args.get("hora"))
+        if hora is None:
+            return "No entiendo esa hora. Dámela en 24 horas, por ejemplo 07:00."
+
+        dias = parse_dias(args.get("dias"))
+        resultado = self.alarmas.pon(hora, dias, args.get("etiqueta") or "")
+        if not resultado.get("ok"):
+            return f"No he podido: {resultado.get('motivo', '?')}."
+
+        alarma = resultado["alarma"]
+        self.bus.emit("alarma", message=f"Alarma a las {alarma['hora']}",
+                      hora=alarma["hora"])
+        return f"Alarma puesta: {self._alarma_en_palabras(alarma)}."
+
+    def _tool_ver_alarmas(self, args: dict) -> str:  # noqa: ARG002
+        if not (alarmas := self.alarmas.lista()):
+            return "No tienes alarmas puestas."
+
+        lineas = []
+        for alarma in alarmas:
+            linea = self._alarma_en_palabras(alarma)
+            if not alarma.get("activa", True):
+                linea += " (apagada)"
+            elif alarma.get("sonando"):
+                linea += " (sonando ahora)"
+            elif alarma.get("pospuesta"):
+                linea += " (pospuesta)"
+            elif alarma.get("perdida"):
+                linea += " (no sonó, estaba apagado)"
+            lineas.append(linea)
+        return "; ".join(lineas) + "."
+
+    def _tool_parar_alarma(self, args: dict) -> str:
+        if self.external_content_seen:
+            # Callar una alarma es justo lo que no quieres que dicte un correo.
+            return ("No toco las alarmas: en este turno he leído contenido de "
+                    "fuera. Pídemelo otra vez en una frase aparte.")
+
+        if not self.alarmas.sonando():
+            return "No está sonando ninguna alarma."
+
+        if args.get("posponer"):
+            minutos = args.get("minutos")
+            pospuestas = self.alarmas.pospon(minutos=int(minutos) if minutos
+                                             else None)
+            if not pospuestas:
+                return "Ya se había callado sola."
+            espera = pospuestas[0]["espera"]
+            self.bus.emit("alarma", message="Alarma pospuesta", parada=True)
+            return f"Vale. Vuelvo en {duracion(espera.total_seconds())}."
+
+        paradas = self.alarmas.para()
+        self.bus.emit("alarma", message="Alarma apagada", parada=True)
+        if len(paradas) == 1 and paradas[0].get("dias"):
+            proxima = _fecha(paradas[0].get("proxima"))
+            if proxima is not None:
+                return (f"Apagada. La siguiente, "
+                        f"{self._dia_relativo(proxima)} a las "
+                        f"{paradas[0]['hora']}.")
+        return "Apagada."
+
+    def _tool_encender_alarma(self, args: dict) -> str:
+        if self.external_content_seen:
+            return ("No toco las alarmas: en este turno he leído contenido de "
+                    "fuera. Pídemelo otra vez en una frase aparte.")
+
+        alarma, aclaracion = self._resuelve_alarma(args.get("cual") or "")
+        if alarma is None:
+            return aclaracion
+
+        encendida = bool(args.get("encendida"))
+        if bool(alarma.get("activa", True)) == encendida:
+            estado = "encendida" if encendida else "apagada"
+            return f"{self._alarma_en_palabras(alarma)} ya estaba {estado}."
+
+        cambiada = self.alarmas.activa(alarma["id"], encendida)
+        self.bus.emit("alarma", message=("Alarma encendida" if encendida
+                                         else "Alarma apagada"),
+                      hora=alarma["hora"])
+        if not encendida:
+            return f"Apagada la de {self._alarma_en_palabras(alarma)}."
+        return f"Encendida: {self._alarma_en_palabras(cambiada)}."
+
+    def _tool_quitar_alarma(self, args: dict) -> str:
+        alarma, aclaracion = self._resuelve_alarma(args.get("cual") or "")
+        if alarma is None:
+            return aclaracion
+
+        propuesta = {"accion": "quitar_alarma", "id": alarma["id"]}
+        lectura = f"borrar la alarma de {self._alarma_en_palabras(alarma)}"
+        if (pendiente := self._confirmacion(propuesta, bool(args.get("confirmar")),
+                                            lectura, "borrar")) is not None:
+            return pendiente
+
+        self.alarmas.quita(alarma["id"])
+        self.bus.emit("alarma", message="Alarma borrada", hora=alarma["hora"])
+        return f"Borrada la alarma de las {alarma['hora']}."
+
+    def _resuelve_alarma(self, cual: str) -> tuple[dict | None, str]:
+        """Cuál de todas, sin adivinar cuando de verdad hay dudas."""
+        if not (alarmas := self.alarmas.lista()):
+            return None, "No tienes alarmas puestas."
+
+        if not (cual := (cual or "").strip()):
+            if len(alarmas) == 1:
+                return alarmas[0], ""
+            return None, ("Tienes varias, pregúntale a cuál se refiere: "
+                          + _y([self._alarma_en_palabras(a) for a in alarmas])
+                          + ".")
+
+        if not (encontradas := self.alarmas.busca(cual)):
+            return None, (f"No tengo ninguna alarma que encaje con «{cual}». "
+                          "Tienes: "
+                          + _y([self._alarma_en_palabras(a) for a in alarmas])
+                          + ".")
+        if len(encontradas) > 1:
+            return None, ("Hay varias que encajan, pregúntale cuál: "
+                          + _y([self._alarma_en_palabras(a)
+                                for a in encontradas]) + ".")
+        return encontradas[0], ""
+
+    def _alarma_en_palabras(self, alarma: dict) -> str:
+        """«las 07:00, de lunes a viernes» o «las 07:00, mañana»."""
+        if alarma.get("dias"):
+            cuando = dias_en_palabras(alarma["dias"])
+        else:
+            cuando = self._dia_relativo(_fecha(alarma.get("proxima")))
+        etiqueta = f" ({alarma['etiqueta']})" if alarma.get("etiqueta") else ""
+        return f"las {alarma.get('hora', '?')}, {cuando}{etiqueta}"
+
+    def _dia_relativo(self, fecha: datetime | None) -> str:
+        """«hoy», «mañana» o el día de la semana, que es como se dice."""
+        if fecha is None:
+            return "sin fecha"
+        faltan = (fecha.date() - _ahora().date()).days
+        if faltan <= 0:
+            return "hoy"
+        if faltan == 1:
+            return "mañana"
+        return f"el {self.DIAS[fecha.weekday()]}"
+
+    def _voz_de_alarma(self, aviso: dict) -> str:
+        etiqueta = (aviso.get("etiqueta") or "").strip()
+        if aviso.get("vez", 1) > 1:
+            if etiqueta:
+                return f"Sigue sonando: {etiqueta}."
+            return f"Sigue sonando la alarma de las {aviso['hora']}."
+
+        minutos = int(aviso.get("retraso", 0) // 60)
+        tarde = f", {minutos} minutos tarde" if minutos >= 1 else ""
+        quien = f": {etiqueta}" if etiqueta else ""
+        return (f"Son las {aviso['hora']}{tarde}{quien}. "
+                "Dime «para» o «pospón».")
+
+    async def dispara_alarmas(self) -> int:
+        """Hace sonar las que tocan. Lo llama el bucle de la tubería.
+
+        Al móvil va solo la primera vuelta: una alarma insiste diez veces en
+        voz alta, y diez avisos en el bolsillo no despiertan mejor, molestan
+        más.
+        """
+        avisos = await asyncio.to_thread(self.alarmas.revisa)
+        for aviso in avisos:
+            mensaje = self._voz_de_alarma(aviso)
+            self.bus.emit("alarma", message=mensaje, hora=aviso.get("hora"),
+                          vez=aviso.get("vez", 1))
+            if self.on_announce is not None:
+                await self.on_announce(mensaje)
+            if (aviso.get("vez") == 1 and self.avisar_alarmas
+                    and self.avisos.disponible):
+                await asyncio.to_thread(self.avisos.envia, mensaje, "Alarma",
+                                        True)
+        return len(avisos)
 
     def _tool_guardar_nota(self, args: dict) -> str:
         notes = _json_store(self.notes_file)

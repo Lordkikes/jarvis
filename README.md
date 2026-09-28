@@ -590,6 +590,68 @@ y dormir hasta pasado mañana se lleva mal con los cambios de hora.
 > Si tienes los avisos al móvil configurados, un recordatorio suena también
 > ahí, igual que los temporizadores.
 
+### Alarmas
+
+```
+«ponme una alarma a las siete de lunes a viernes»
+«despiértame mañana a las seis y media»
+«para» / «cinco minutos más»          → mientras suena
+«apaga la alarma de los lunes»        → sin borrarla, para la semana que libras
+```
+
+Con recordatorios y temporizadores ya puestos, una alarma podría parecer el
+mismo mecanismo con otro nombre. No lo es, y lo que la separa **no es la hora,
+es la insistencia**: un recordatorio dice su frase una vez y se calla, que es
+exactamente lo que no quieres a las siete de la mañana. Una alarma vuelve cada
+treinta segundos hasta que alguien diga que ya, y se puede posponer, que es la
+mitad de para qué existe.
+
+De ahí salen las tres diferencias:
+
+- **Se repite por días de la semana**, que es como se piensan: «de lunes a
+  viernes», no «cada 24 horas».
+- **Se pospone.** Nueve minutos por defecto, los de los radiodespertadores de
+  toda la vida; configurable.
+- **Lo que se perdió estando apagado no suena.** Un recordatorio de hace tres
+  horas todavía sirve; una alarma de hace tres horas no despierta a nadie,
+  solo asusta. Pasados cinco minutos se da por perdida y se te dice al
+  preguntar por ellas, sin sobresaltos.
+
+Esa última regla vale también para el caso raro de verdad: si el proceso se
+cae **mientras** está sonando, al volver retoma el timbre solo si han pasado
+menos de esos cinco minutos. Volver a sonar a las doce porque a las nueve se
+fue la luz sería justo el susto inútil que se intenta evitar. Hay prueba de
+las dos mitades.
+
+**Persisten en `data/alarms.json`**, hasta el «está sonando»: reiniciar a las
+siete y cinco no la calla. Y cuentan con la hora de la pared, al revés que los
+temporizadores: las siete son las siete aunque el reloj se corrija por el
+camino.
+
+El bucle que las mira va a **cinco segundos**, no a treinta como el de los
+recordatorios. No es capricho: a una alarma treinta segundos de margen se le
+notan, y como la insistencia va justo a treinta, sondear a ese mismo ritmo la
+haría repetirse cada minuto largo en vez de cada medio.
+
+```yaml
+tools:
+  alarms_file: data/alarms.json
+  alarmas:
+    posponer_minutos: 9
+  avisos:
+    alarmas: true     # también al móvil, y solo la primera vuelta
+```
+
+> Al móvil va **solo el primer timbre**. Una alarma insiste diez veces en voz
+> alta; diez avisos en el bolsillo no despiertan mejor, molestan más.
+
+Poner, parar, posponer, apagar y borrar se bloquean si en ese turno se ha
+leído un correo o una publicación. Aquí la línea es más estricta que con los
+temporizadores a propósito: una alarma diaria a las tres de la mañana la pone
+un correo una sola vez y la sufres todas las noches, y callar la de las siete
+es justo lo que no quieres que dicte nadie de fuera. Preguntar qué alarmas
+tienes sí se puede, que eso no actúa.
+
 ### Avisos al móvil
 
 Dos caminos, y si tienes los dos se manda por los dos: un aviso que no llega
@@ -790,6 +852,8 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 - Poner temporizadores —varios, con nombre— y avisarte cuando vencen, en voz
   alta y en el móvil. Se pueden pausar, alargar y cancelar hablando.
 - Recordarte cosas a una hora concreta, aunque reinicies o sea para el jueves.
+- Despertarte: alarmas por días de la semana, que insisten hasta que las
+  paras y se pueden posponer.
 - Guardar y leer notas.
 - Llevarte listas de la compra: añadir, tachar y vaciar, hablando.
 - Encender, apagar y consultar lo que tengas en Home Assistant.
@@ -845,6 +909,8 @@ jarvis/
 │   ├── escenas.py          # escenas propias, con su instantánea
 │   ├── avisos.py           # notificaciones al móvil (ntfy / Home Assistant)
 │   ├── recordatorios.py    # lo que hay que decir a una hora concreta
+│   ├── temporizadores.py   # cuentas atrás, con reloj monótono
+│   ├── alarmas.py          # ★ alarmas: días de la semana e insistencia
 │   ├── musica.py           # altavoces de casa y reproductor del equipo
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
