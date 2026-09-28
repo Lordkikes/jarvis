@@ -156,6 +156,7 @@ tools:
   scenes_file: data/scenes.json
   reminders_file: data/reminders.json
   alarms_file: data/alarms.json
+  routines_file: data/routines.json
 
   # Para la música del propio equipo (Spotify, VLC, el navegador…) hace falta
   # `playerctl`, que está en los repositorios de cualquier distribución. Si no
