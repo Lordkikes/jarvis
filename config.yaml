@@ -159,6 +159,16 @@ tools:
   # está instalado, Jarvis solo maneja los altavoces de Home Assistant.
   playerctl: playerctl
 
+  musica:
+    # Una carpeta con tu música, para poder pedir canciones por su nombre sin
+    # depender de ningún servicio. Se busca por la ruta del fichero.
+    biblioteca: ""         # ~/Música
+    # Emisoras y listas con nombre propio: es lo que resuelve «pon Radio 3»,
+    # que no es una búsqueda sino una dirección concreta.
+    favoritos: {}
+      # Radio 3: https://crtaudio.rtve.es/resources/radio3.mp3
+      # Mi lista: spotify:playlist:37i9dQZF1DXcBWIGoYBM5M
+
   home_assistant:
     url: ""              # http://homeassistant.local:8123
     verify_ssl: true
