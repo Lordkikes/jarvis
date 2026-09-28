@@ -264,3 +264,188 @@ def build_event(uid: str, inicio: datetime, fin: datetime, summary: str,
         lineas.append(f"DESCRIPTION:{escape(description)}")
     lineas += ["END:VEVENT", "END:VCALENDAR"]
     return "\r\n".join(fold(linea) for linea in lineas) + "\r\n"
+
+
+# -- edición ----------------------------------------------------------------
+# Mover o cancelar obliga a tocar un iCalendar que ya existe. Se hace a nivel
+# de línea, y no reconstruyendo el fichero desde lo que parseamos, por una
+# razón concreta: el recurso puede traer VALARM (los recordatorios de la
+# persona) y VTIMEZONE (sin los cuales un TZID deja de resolverse). Rehacerlo
+# los perdería en silencio. Editando líneas, todo lo que no se toca sobrevive
+# byte a byte.
+
+def _componentes(lineas: list[str]) -> list[tuple[int, int, str]]:
+    """Los VEVENT del fichero como (primera línea, última línea, nombre)."""
+    bloques, pila = [], []
+    for indice, linea in enumerate(lineas):
+        nombre, _, valor = parse_line(linea)
+        if nombre == "BEGIN":
+            pila.append((valor.strip().upper(), indice))
+        elif nombre == "END" and pila:
+            componente, inicio = pila.pop()
+            bloques.append((inicio, indice, componente))
+    return bloques
+
+
+def find_vevent(lineas: list[str], uid: str, recurrence_id: datetime | None = None):
+    """Localiza el VEVENT de ese UID: el maestro, o una excepción concreta.
+
+    Devuelve (inicio, fin) con los índices de BEGIN y END, o None.
+    """
+    for inicio, fin, componente in _componentes(lineas):
+        if componente != "VEVENT":
+            continue
+        cuerpo = lineas[inicio:fin + 1]
+        propiedades = {}
+        for linea in cuerpo:
+            nombre, params, valor = parse_line(linea)
+            propiedades.setdefault(nombre, (params, valor))
+        if unescape(propiedades.get("UID", ({}, ""))[1]).strip() != uid:
+            continue
+
+        suya = propiedades.get("RECURRENCE-ID")
+        cuando = parse_dt(suya[1], suya[0]) if suya else None
+        if recurrence_id is None and cuando is None:
+            return inicio, fin
+        if recurrence_id is not None and cuando == recurrence_id:
+            return inicio, fin
+    return None
+
+
+def _propias(cuerpo: list[str]) -> list[bool]:
+    """Qué líneas del bloque son del propio VEVENT y cuáles de algo anidado.
+
+    Importa porque un VALARM dentro lleva su DESCRIPTION y puede llevar su
+    DURATION: tocarlas al editar el evento le rompería el recordatorio a la
+    persona sin que se note hasta que no suene.
+    """
+    marcas, hondura = [], 0
+    for linea in cuerpo:
+        nombre, _, _ = parse_line(linea)
+        if nombre == "BEGIN":
+            hondura += 1
+            marcas.append(hondura == 1)      # el BEGIN:VEVENT sí es suyo
+        elif nombre == "END":
+            marcas.append(hondura == 1)
+            hondura -= 1
+        else:
+            marcas.append(hondura == 1)
+    return marcas
+
+
+def _sin_propiedad(cuerpo: list[str], *nombres: str) -> list[str]:
+    """Quita esas propiedades del evento, sin entrar en lo que tenga dentro."""
+    propias = _propias(cuerpo)
+    return [linea for linea, suya in zip(cuerpo, propias)
+            if not (suya and parse_line(linea)[0] in nombres)]
+
+
+def _sequence(cuerpo: list[str]) -> int:
+    """El número de revisión del evento, que hay que subir al reprogramar."""
+    for linea, suya in zip(cuerpo, _propias(cuerpo)):
+        nombre, _, valor = parse_line(linea)
+        if suya and nombre == "SEQUENCE" and valor.strip().isdigit():
+            return int(valor.strip())
+    return 0
+
+
+def reschedule(ics: str, uid: str, inicio: datetime, fin: datetime,
+               recurrence_id: datetime | None = None) -> str | None:
+    """Cambia la fecha de un evento. None si ese UID no está en el fichero.
+
+    Sube SEQUENCE y refresca DTSTAMP y LAST-MODIFIED, que es lo que mira el
+    resto de clientes para saber que la cita se ha reprogramado.
+    """
+    lineas = unfold(ics)
+    if (sitio := find_vevent(lineas, uid, recurrence_id)) is None:
+        return None
+
+    desde, hasta = sitio
+    cuerpo = lineas[desde:hasta + 1]
+    # DURATION y DTEND son excluyentes: al fijar DTEND hay que quitar la otra.
+    cuerpo = _sin_propiedad(cuerpo, "DTSTART", "DTEND", "DURATION", "DTSTAMP",
+                            "LAST-MODIFIED", "SEQUENCE")
+    nuevas = [
+        f"DTSTART:{format_dt(inicio)}",
+        f"DTEND:{format_dt(fin)}",
+        f"DTSTAMP:{format_dt(datetime.now(timezone.utc))}",
+        f"LAST-MODIFIED:{format_dt(datetime.now(timezone.utc))}",
+        f"SEQUENCE:{_sequence(lineas[desde:hasta + 1]) + 1}",
+    ]
+    cuerpo = cuerpo[:1] + nuevas + cuerpo[1:]      # justo tras BEGIN:VEVENT
+    return _rehacer(lineas, desde, hasta, cuerpo)
+
+
+def add_exdate(ics: str, uid: str, cuando: datetime) -> str | None:
+    """Excluye una ocurrencia de una serie, que es como se cancela solo una."""
+    lineas = unfold(ics)
+    if (sitio := find_vevent(lineas, uid)) is None:
+        return None
+
+    desde, hasta = sitio
+    cuerpo = lineas[desde:hasta + 1]
+    ya = _sin_propiedad(cuerpo, "DTSTAMP", "LAST-MODIFIED", "SEQUENCE")
+    nuevas = [
+        f"EXDATE:{format_dt(cuando)}",
+        f"DTSTAMP:{format_dt(datetime.now(timezone.utc))}",
+        f"LAST-MODIFIED:{format_dt(datetime.now(timezone.utc))}",
+        f"SEQUENCE:{_sequence(cuerpo) + 1}",
+    ]
+    return _rehacer(lineas, desde, hasta, ya[:1] + nuevas + ya[1:])
+
+
+def add_override(ics: str, uid: str, original: datetime, inicio: datetime,
+                 fin: datetime) -> str | None:
+    """Añade una excepción: esa ocurrencia pasa a otra hora, el resto sigue.
+
+    Es la manera que define RFC 5545 de mover un solo día de una serie: un
+    VEVENT aparte, con el mismo UID y un RECURRENCE-ID que apunta a la
+    ocurrencia original.
+    """
+    lineas = unfold(ics)
+    if (sitio := find_vevent(lineas, uid)) is None:
+        return None
+
+    # Si esa ocurrencia ya tenía excepción, se reprograma en vez de duplicarla.
+    if find_vevent(lineas, uid, original) is not None:
+        return reschedule(ics, uid, inicio, fin, recurrence_id=original)
+
+    desde, hasta = sitio
+    maestro = lineas[desde:hasta + 1]
+    heredadas = [linea for linea, suya in zip(maestro, _propias(maestro))
+                 if suya and parse_line(linea)[0] in (
+                     "SUMMARY", "LOCATION", "DESCRIPTION", "ORGANIZER",
+                     "ATTENDEE", "CLASS")]
+    excepcion = [
+        "BEGIN:VEVENT",
+        f"UID:{escape(uid)}",
+        f"RECURRENCE-ID:{format_dt(original)}",
+        f"DTSTAMP:{format_dt(datetime.now(timezone.utc))}",
+        f"DTSTART:{format_dt(inicio)}",
+        f"DTEND:{format_dt(fin)}",
+        "SEQUENCE:1",
+        *heredadas,
+        "END:VEVENT",
+    ]
+    # Va justo antes de cerrar el calendario.
+    corte = len(lineas) - 1
+    for indice, linea in enumerate(lineas):
+        if parse_line(linea)[0] == "END" and parse_line(linea)[2].strip().upper() == "VCALENDAR":
+            corte = indice
+            break
+    nuevas = lineas[:corte] + excepcion + lineas[corte:]
+    return "\r\n".join(fold(linea) for linea in nuevas) + "\r\n"
+
+
+def remove_vevent(ics: str, uid: str, recurrence_id: datetime) -> str | None:
+    """Quita una excepción concreta, dejando el maestro y el resto en su sitio."""
+    lineas = unfold(ics)
+    if (sitio := find_vevent(lineas, uid, recurrence_id)) is None:
+        return None
+    desde, hasta = sitio
+    return _rehacer(lineas, desde, hasta, [])
+
+
+def _rehacer(lineas: list[str], desde: int, hasta: int, cuerpo: list[str]) -> str:
+    nuevas = lineas[:desde] + cuerpo + lineas[hasta + 1:]
+    return "\r\n".join(fold(linea) for linea in nuevas) + "\r\n"

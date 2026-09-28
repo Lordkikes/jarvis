@@ -240,7 +240,8 @@ Jarvis indexa en segundo plano lo que le dejes ver y luego responde desde ese
 | **Calendario** | Tus citas, con las repeticiones ya expandidas | 0 €, por CalDAV o por URL `.ics` |
 
 El calendario es además la única fuente en la que Jarvis **escribe**: puede
-crear citas, con una confirmación hablada de por medio (más abajo).
+crear, mover y cancelar citas, con una confirmación hablada de por medio
+(más abajo).
 
 Preguntas que ya entiende: *«¿qué estuve haciendo ayer en el proyecto del
 cliente?»*, *«¿me ha escrito alguien sobre la factura?»*, *«resúmeme los
@@ -403,18 +404,19 @@ autenticación básica de CalDAV y hoy exige OAuth 2.0.
 > —`BYSETPOS` y compañía— **se detecta y se marca**: de ese evento solo consta
 > la primera aparición, y el índice lo dice en vez de inventarse fechas.
 
-#### Crear citas
+#### Crear, mover y cancelar citas
 
-Jarvis puede crear citas, y es lo único que escribe en algún sitio. Eso cambia
-lo que está en juego: una hora mal entendida por el micrófono se convierte en
-una reunión real a las cinco de la mañana. Por eso la creación va **en dos
-pasos, y los impone el código, no el buen criterio del modelo**:
+El calendario es lo único en lo que Jarvis escribe. Eso cambia lo que está en
+juego: una hora mal entendida por el micrófono se convierte en una reunión
+real a las cinco de la mañana, o en una cita del dentista que desaparece. Por
+eso las tres operaciones van **en dos pasos, y los impone el código, no el
+buen criterio del modelo**:
 
-1. La primera llamada no manda nada al servidor. Devuelve la cita en limpio
+1. La primera llamada no manda nada al servidor. Devuelve la acción en limpio
    —«*Dentista* el martes 29 de septiembre a las 17:00, 30 minutos»— para que
    Jarvis te la lea tal cual.
-2. Solo si vuelve a llamar con **los mismos datos** y tu confirmación se hace
-   el `PUT`. Si algo cambió entre medias, vuelve al paso uno y te lo lee otra
+2. Solo si vuelve a llamar con **los mismos datos** y tu confirmación se
+   escribe. Si algo cambió entre medias, vuelve al paso uno y te lo lee otra
    vez.
 
 Un modelo que intente confirmar por su cuenta en la primera llamada no crea
@@ -426,13 +428,33 @@ igual que pasa con `abrir`. Mirar la agenda y *proponerte* una cita sí está
 permitido; lo que se frena es escribir en el mismo turno en el que un correo
 podría estar dictándola.
 
-El `PUT` va con `If-None-Match: *`, así que si el recurso ya existiera el
-servidor rechaza la petición en vez de pisar lo que hubiera. Y si algo falla,
-**no hay reintento**: es preferible contártelo a arriesgarse a crear la cita
-dos veces. Crear solo funciona por CalDAV; una URL `.ics` es un fichero que se
-descarga, no un sitio donde escribir.
+**Escribir es siempre condicional.** Al crear, el `PUT` lleva
+`If-None-Match: *`: si el recurso ya existiera, el servidor rechaza en vez de
+pisarlo. Al mover o cancelar va un `If-Match` con el `ETag` del recurso, que
+se relee justo antes de escribir; si alguien lo cambió desde el móvil mientras
+tanto, el servidor devuelve `412` y Jarvis te dice que lo mire otra vez en vez
+de machacar el cambio ajeno. Y si algo falla, **no hay reintento**: es
+preferible contártelo a arriesgarse a duplicar o perder una cita real.
 
-Para apagarlo del todo, `sources.calendar.caldav.allow_write: false`.
+**Con lo que se repite, lo mínimo.** Mover «el standup del lunes que viene»
+añade una excepción (`RECURRENCE-ID`) para ese día; el resto de los lunes
+siguen donde estaban. Cancelarlo añade un `EXDATE`. Borrar el recurso entero
+—que se lleva la serie por delante— solo pasa si se lo pides expresamente, y
+entonces la lectura te lo dice en mayúsculas: «y TODAS sus repeticiones».
+Confirmar «solo ese día» no vale para borrar la serie: son propuestas
+distintas, y el código las distingue.
+
+**Referirte a la cita hablando.** No hace falta ningún identificador: dices
+parte del título y Jarvis lo busca en el índice, sin tildes ni mayúsculas de
+por medio. Si encuentra dos citas **distintas** que encajan, no elige: te
+pregunta cuál. Si lo que encuentra son varias repeticiones de la misma, coge
+la más próxima, que es lo que quiere decir cualquiera.
+
+Escribir solo funciona por CalDAV; una URL `.ics` es un fichero que se
+descarga, no un sitio donde escribir, y Jarvis te lo dice si lo intentas.
+
+Para apagarlo del todo, `sources.calendar.caldav.allow_write: false`: las tres
+herramientas dejan incluso de ofrecérsele al modelo.
 
 Las cuatro redes sociales son de solo lectura y no publican nada. En Bluesky y en
 Reddit el token de acceso caduca (minutos y una hora respectivamente), así que
@@ -480,7 +502,7 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
   recientes, sesiones de Claude Code, publicaciones de Bluesky, Mastodon,
   Reddit y X, y artículos de los feeds que sigas.
 - Contarte la agenda: qué tienes ahora, hoy o esta semana.
-- Crear citas en el calendario, leyéndotelas antes y esperando tu «sí».
+- Crear, mover y cancelar citas, leyéndotelas antes y esperando tu «sí».
 
 ---
 
@@ -724,8 +746,7 @@ Ideas para seguir construyendo, más o menos por dificultad:
 1. **Más fuentes**: las ocho actuales cubren correo, código, redes, feeds y
    calendario. LinkedIn seguirá fuera mientras no abra una API para cuentas
    personales.
-2. **Más herramientas**: domótica, control de música, y mover o cancelar
-   citas además de crearlas.
+2. **Más herramientas**: domótica, control de música, listas de la compra.
 3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
 4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.
 5. **Acceso desde el móvil**: exponer el servidor en la red local (`server.host: 0.0.0.0`) — hazlo solo en redes de confianza, no hay autenticación.

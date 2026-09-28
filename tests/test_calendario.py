@@ -145,11 +145,20 @@ class TestEventosAItems(unittest.TestCase):
 
 
 class TestRespuestaCalDav(unittest.TestCase):
-    def test_se_extrae_el_ical(self):
+    def test_se_extrae_el_ical_con_su_href_y_su_etag(self):
         xml = MULTISTATUS.format(ics=calendario(REUNION)).encode()
-        datos = calendar_data(xml)
-        self.assertEqual(len(datos), 1)
-        self.assertIn("reunion-1", datos[0])
+        recurso, = calendar_data(xml)
+        self.assertIn("reunion-1", recurso["ics"])
+        self.assertEqual(recurso["href"], "/calendars/yelko/personal/reunion.ics")
+        self.assertEqual(recurso["etag"], '"1"')
+
+    def test_una_respuesta_sin_datos_se_salta(self):
+        xml = b"""<?xml version="1.0"?>
+        <D:multistatus xmlns:D="DAV:"><D:response>
+          <D:href>/x.ics</D:href>
+          <D:propstat><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat>
+        </D:response></D:multistatus>"""
+        self.assertEqual(calendar_data(xml), [])
 
     def test_un_xml_ilegible_no_revienta(self):
         self.assertEqual(calendar_data(b"<D:multi"), [])

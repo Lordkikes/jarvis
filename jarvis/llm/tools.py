@@ -13,13 +13,34 @@ import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ..config import data_path
+from ..sources import ical
 from ..http import AsyncClient
 
 log = logging.getLogger("jarvis.tools")
+
+
+def _ahora() -> datetime:
+    return datetime.now().astimezone()
+
+
+def _fecha(valor) -> datetime | None:
+    """Una fecha ISO a datetime consciente, en hora local si no trae zona."""
+    try:
+        fecha = datetime.fromisoformat((valor or "").strip())
+    except (TypeError, ValueError):
+        return None
+    return fecha.astimezone() if fecha.tzinfo is None else fecha
+
+
+def _sin_tildes(texto: str) -> str:
+    """Para comparar lo que se dice con lo que está escrito."""
+    descompuesto = unicodedata.normalize("NFKD", (texto or "").lower())
+    return "".join(c for c in descompuesto if not unicodedata.combining(c))
 
 WEATHER_CODES = {
     0: "despejado", 1: "mayormente despejado", 2: "parcialmente nublado", 3: "nublado",
@@ -206,6 +227,59 @@ class Toolbox:
             },
         },
         {
+            "name": "mover_cita",
+            "description": (
+                "Cambia la fecha o la hora de una cita que ya existe. Dos "
+                "pasos, igual que `crear_cita`: la primera llamada no toca "
+                "nada y devuelve el cambio en limpio para que se lo leas; solo "
+                "si dice que sí vuelves a llamar con `confirmar` en true. Si "
+                "la cita se repite, mueve solo ese día."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "cual": {"type": "string",
+                             "description": "Parte del título, como lo diría "
+                                            "la persona"},
+                    "nuevo_inicio": {"type": "string",
+                                     "description": "Fecha y hora nuevas en "
+                                                    "ISO 8601"},
+                    "fecha": {"type": "string",
+                              "description": "Opcional, AAAA-MM-DD, si hay "
+                                             "varias con el mismo nombre"},
+                    "duracion_minutos": {"type": "integer",
+                                         "description": "Opcional; si no, la "
+                                                        "que ya tenía"},
+                    "dias": {"type": "integer", "default": 30, "maximum": 60},
+                    "confirmar": {"type": "boolean", "default": False},
+                },
+                "required": ["cual", "nuevo_inicio"],
+            },
+        },
+        {
+            "name": "cancelar_cita",
+            "description": (
+                "Cancela una cita. Dos pasos, igual que `crear_cita`. Si se "
+                "repite, cancela solo ese día salvo que la persona pida "
+                "expresamente quitar todas las repeticiones."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "cual": {"type": "string",
+                             "description": "Parte del título, como lo diría "
+                                            "la persona"},
+                    "fecha": {"type": "string",
+                              "description": "Opcional, AAAA-MM-DD, si hay "
+                                             "varias con el mismo nombre"},
+                    "toda_la_serie": {"type": "boolean", "default": False,
+                                      "description": "Solo si ha pedido quitar "
+                                                     "todas las repeticiones"},
+                    "dias": {"type": "integer", "default": 30, "maximum": 60},
+                    "confirmar": {"type": "boolean", "default": False},
+                },
+                "required": ["cual"],
+            },
+        },
+        {
             "name": "estado_del_sistema",
             "description": "CPU, memoria y disco del equipo donde corre Jarvis.",
             "input_schema": {"type": "object", "properties": {}},
@@ -230,9 +304,9 @@ class Toolbox:
         self.on_announce = on_announce  # callback para hablar (temporizadores)
         self.store = store              # índice de correos y sesiones
         self.calendar = calendar        # fuente de calendario, para crear citas
-        # Cita propuesta y pendiente de que la persona diga que sí. Ver
-        # `_tool_crear_cita`: la confirmación la exige el código, no el modelo.
-        self._cita_pendiente: dict | None = None
+        # Acción propuesta y pendiente de que la persona diga que sí. Ver
+        # `_confirmacion`: el segundo paso lo exige el código, no el modelo.
+        self._pendiente: dict | None = None
         # Se pone a True en cuanto el turno lee algo de fuera. Ver `_external`.
         self.external_content_seen = False
         self.allow_system = bool(cfg.get("tools.allow_system", True))
@@ -261,7 +335,7 @@ class Toolbox:
     def definitions(self) -> list[dict]:
         hidden = set()
         if not getattr(self.calendar, "allow_write", False):
-            hidden.add("crear_cita")
+            hidden |= {"crear_cita", "mover_cita", "cancelar_cita"}
         if not self.allow_system:
             hidden |= {"abrir", "estado_del_sistema"}
         if self.store is None:
@@ -455,12 +529,36 @@ class Toolbox:
     MESES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
              "agosto", "septiembre", "octubre", "noviembre", "diciembre")
 
+    def _fecha_hablada(self, fecha: datetime) -> str:
+        """`%A` y `%B` darían los nombres en inglés; aquí se dicen en español."""
+        return (f"{self.DIAS[fecha.weekday()]} {fecha.day} de "
+                f"{self.MESES[fecha.month - 1]} a las {fecha:%H:%M}")
+
     def _en_palabras(self, titulo: str, inicio: datetime, minutos: int) -> str:
         """La cita dicha como la diría una persona, para leerla en voz alta."""
-        return (f"«{titulo}» el "
-                f"{self.DIAS[inicio.weekday()]} {inicio.day} de "
-                f"{self.MESES[inicio.month - 1]} a las {inicio:%H:%M}"
-                f", {minutos} minutos")
+        return f"«{titulo}» el {self._fecha_hablada(inicio)}, {minutos} minutos"
+
+    def _confirmacion(self, propuesta: dict, confirmar: bool, lectura: str,
+                      verbo: str) -> str | None:
+        """La cautela compartida por crear, mover y cancelar.
+
+        Devuelve el texto que hay que leerle a la persona mientras falte su
+        visto bueno, y None cuando se puede seguir. Que esto viva en el código
+        y no en el prompt es el punto: un modelo que se salte el primer paso
+        no encuentra propuesta previa que coincida y vuelve aquí.
+        """
+        if not confirmar or self._pendiente != propuesta:
+            self._pendiente = propuesta
+            return f"Sin {verbo} todavía. Léeselo tal cual y pregunta si sigo: {lectura}"
+
+        # Ya dijo que sí. Misma cautela que con `abrir`.
+        if self.external_content_seen:
+            self._pendiente = None
+            return ("No lo hago: en este turno he leído contenido de fuera, y "
+                    "eso podría estar dictándome lo que escribo. Pídemelo otra "
+                    "vez en una frase aparte.")
+        self._pendiente = None
+        return None
 
     def _tool_crear_cita(self, args: dict) -> str:
         if not getattr(self.calendar, "allow_write", False):
@@ -471,58 +569,220 @@ class Toolbox:
         if not titulo:
             return "¿Cómo se llama la cita?"
 
-        try:
-            # `fromisoformat` no admite la Z; una hora local no la lleva.
-            inicio = datetime.fromisoformat((args.get("inicio") or "").strip())
-        except ValueError:
+        inicio = _fecha(args.get("inicio"))
+        if inicio is None:
             return ("No entiendo esa fecha. Dámela en ISO 8601, "
                     "por ejemplo 2026-09-29T17:00.")
-        if inicio.tzinfo is None:
-            inicio = inicio.astimezone()   # hora local del equipo
 
         minutos = max(1, min(24 * 60, int(args.get("duracion_minutos", 60) or 60)))
+        lugar = (args.get("lugar") or "").strip()
         propuesta = {
-            "titulo": titulo,
+            "accion": "crear", "titulo": titulo, "minutos": minutos,
             "inicio": inicio.isoformat(timespec="minutes"),
-            "minutos": minutos,
-            "lugar": (args.get("lugar") or "").strip(),
-            "descripcion": (args.get("descripcion") or "").strip(),
+            "lugar": lugar, "descripcion": (args.get("descripcion") or "").strip(),
         }
-
-        # Primer paso, o datos distintos de los ya propuestos: no se escribe
-        # nada. La persona tiene que oír exactamente lo que se va a crear.
-        if not args.get("confirmar") or self._cita_pendiente != propuesta:
-            self._cita_pendiente = propuesta
-            aviso = ""
-            if inicio < datetime.now().astimezone():
-                aviso = " OJO: esa fecha ya ha pasado."
-            return (f"Sin crear todavía. Léeselo tal cual y pregunta si lo creo: "
-                    f"{self._en_palabras(titulo, inicio, minutos)}."
-                    f"{' En ' + propuesta['lugar'] + '.' if propuesta['lugar'] else ''}"
-                    f"{aviso}")
-
-        # Segundo paso: ya dijo que sí. Misma cautela que con `abrir`.
-        if self.external_content_seen:
-            self._cita_pendiente = None
-            return ("No creo la cita: en este turno he leído contenido de "
-                    "fuera, y eso podría estar dictándome lo que escribo. "
-                    "Pídemelo otra vez en una frase aparte.")
+        aviso = " OJO: esa fecha ya ha pasado." if inicio < _ahora() else ""
+        lectura = (f"{self._en_palabras(titulo, inicio, minutos)}."
+                   f"{' En ' + lugar + '.' if lugar else ''}{aviso}")
+        if (pendiente := self._confirmacion(propuesta, bool(args.get("confirmar")),
+                                            lectura, "crear")) is not None:
+            return pendiente
 
         fin = inicio + timedelta(minutes=minutos)
         resultado = self.calendar.create_event(
-            titulo, inicio, fin, propuesta["lugar"], propuesta["descripcion"])
-        self._cita_pendiente = None
+            titulo, inicio, fin, lugar, propuesta["descripcion"])
         if not resultado.get("ok"):
             return f"No he podido crear la cita: {resultado.get('motivo', '?')}"
 
-        if self.store is not None:
-            try:
-                self.calendar.index_event(self.store, resultado["ics"], inicio, fin)
-            except Exception:  # noqa: BLE001 - si falla, entrará en el próximo ciclo
-                log.exception("la cita se creó pero no se pudo indexar")
-        self.bus.emit("sync", source="calendario", nuevos=1)
+        self._reindexa(resultado["ics"], inicio, fin, resultado.get("url", ""),
+                       etag=resultado.get("etag", ""))
         return (f"Creada: {titulo}, el {inicio:%d/%m} a las {inicio:%H:%M}, "
                 f"{minutos} minutos.")
+
+    # -- mover y cancelar ---------------------------------------------------
+    def _resuelve_cita(self, args: dict) -> dict | str:
+        """Encuentra la cita de la que hablan, o dice por qué no puede.
+
+        Devuelve la fila del índice, o un texto para la persona. Si hay varias
+        que encajan no elige ninguna: equivocarse de cita sería peor que
+        preguntar.
+        """
+        if self.store is None:
+            return "No tengo el calendario indexado."
+        busqueda = (args.get("cual") or "").strip()
+        if not busqueda:
+            return "¿Qué cita?"
+
+        dias = max(1, min(60, int(args.get("dias", 30) or 30)))
+        ahora = _ahora()
+        filas = self.store.upcoming(
+            source="calendario", since=ahora.isoformat(timespec="seconds"),
+            until=(ahora + timedelta(days=dias)).isoformat(timespec="seconds"),
+            limit=100)
+
+        objetivo = _sin_tildes(busqueda)
+        candidatas = [f for f in filas if objetivo in _sin_tildes(f.get("title", ""))]
+        if (fecha := (args.get("fecha") or "").strip()):
+            candidatas = [f for f in candidatas
+                          if (f.get("created_at") or "").startswith(fecha)]
+
+        if not candidatas:
+            return (f"No encuentro ninguna cita que se llame así en los "
+                    f"próximos {dias} días.")
+
+        # Una cita que se repite aparece una vez por día en el índice, pero es
+        # la misma: si todas comparten UID no hay nada que preguntar, se coge
+        # la más próxima. Solo son ambiguas las que son de verdad distintas.
+        uids = {self._referencia(f).get("uid", f.get("id")) for f in candidatas}
+        if len(uids) > 1:
+            cuales = "; ".join(
+                f"{f['title']} el {(f.get('created_at') or '')[:16].replace('T', ' a las ')}"
+                for f in candidatas[:5])
+            return f"Hay varias que encajan, pregúntale cuál: {cuales}."
+        # `upcoming` viene de menor a mayor: la primera es la siguiente.
+        return candidatas[0]
+
+    @staticmethod
+    def _referencia(fila: dict) -> dict:
+        meta = fila.get("meta")
+        return json.loads(meta) if isinstance(meta, str) else (meta or {})
+
+    def _tool_mover_cita(self, args: dict) -> str:
+        if not getattr(self.calendar, "allow_write", False):
+            return "No puedo mover citas: el calendario es de solo lectura."
+
+        fila = self._resuelve_cita(args)
+        if isinstance(fila, str):
+            return fila
+        meta = self._referencia(fila)
+        if not meta.get("href"):
+            return ("Esa cita viene de una URL .ics, que es de solo lectura. "
+                    "Solo puedo mover las de CalDAV.")
+
+        nuevo = _fecha(args.get("nuevo_inicio"))
+        if nuevo is None:
+            return ("No entiendo la fecha nueva. Dámela en ISO 8601, "
+                    "por ejemplo 2026-09-30T10:00.")
+
+        minutos = int(args.get("duracion_minutos") or meta.get("minutos") or 60)
+        minutos = max(1, min(24 * 60, minutos))
+        antes = _fecha(meta.get("ocurrencia")) or _fecha(fila.get("created_at"))
+        titulo = fila.get("title", "la cita")
+
+        propuesta = {"accion": "mover", "id": fila.get("id"),
+                     "nuevo": nuevo.isoformat(timespec="minutes"), "minutos": minutos}
+        serie = " (solo ese día; el resto de la serie no se toca)" \
+            if meta.get("se_repite") else ""
+        lectura = (f"mover «{titulo}» del {self._fecha_hablada(antes)} al "
+                   f"{self._en_palabras(titulo, nuevo, minutos)}{serie}.")
+        if (pendiente := self._confirmacion(propuesta, bool(args.get("confirmar")),
+                                            lectura, "mover")) is not None:
+            return pendiente
+
+        actual = self.calendar.fetch_event(meta["href"])
+        if not actual.get("ok"):
+            return f"No he podido mover la cita: {actual.get('motivo', '?')}"
+
+        fin = nuevo + timedelta(minutes=minutos)
+        uid = meta.get("uid", "")
+        recurrencia = _fecha(meta.get("recurrence_id"))
+        if meta.get("se_repite") and recurrencia is None:
+            # Mover un día de una serie es añadir una excepción, no cambiar la
+            # serie entera: el resto de los días siguen donde estaban.
+            ics = ical.add_override(actual["ics"], uid, antes, nuevo, fin)
+        else:
+            ics = ical.reschedule(actual["ics"], uid, nuevo, fin,
+                                  recurrence_id=recurrencia)
+        if ics is None:
+            return "No he encontrado esa cita dentro del fichero del servidor."
+
+        resultado = self.calendar.update_event(meta["href"], actual["etag"], ics)
+        if not resultado.get("ok"):
+            return f"No he podido mover la cita: {resultado.get('motivo', '?')}"
+
+        self._reindexa(ics, nuevo, fin, meta["href"], uid,
+                       resultado.get("etag") or actual["etag"])
+        return f"Movida: {titulo}, ahora el {nuevo:%d/%m} a las {nuevo:%H:%M}."
+
+    def _tool_cancelar_cita(self, args: dict) -> str:
+        if not getattr(self.calendar, "allow_write", False):
+            return "No puedo cancelar citas: el calendario es de solo lectura."
+
+        fila = self._resuelve_cita(args)
+        if isinstance(fila, str):
+            return fila
+        meta = self._referencia(fila)
+        if not meta.get("href"):
+            return ("Esa cita viene de una URL .ics, que es de solo lectura. "
+                    "Solo puedo cancelar las de CalDAV.")
+
+        titulo = fila.get("title", "la cita")
+        cuando = _fecha(meta.get("ocurrencia")) or _fecha(fila.get("created_at"))
+        se_repite = bool(meta.get("se_repite")) or bool(meta.get("recurrence_id"))
+        toda = bool(args.get("toda_la_serie")) and se_repite
+
+        propuesta = {"accion": "cancelar", "id": fila.get("id"), "toda": toda}
+        if toda:
+            alcance = " y TODAS sus repeticiones, pasadas y futuras"
+        elif se_repite:
+            alcance = " solo ese día; el resto de la serie se queda"
+        else:
+            alcance = ""
+        lectura = f"cancelar «{titulo}» del {self._fecha_hablada(cuando)}{alcance}."
+        if (pendiente := self._confirmacion(propuesta, bool(args.get("confirmar")),
+                                            lectura, "cancelar")) is not None:
+            return pendiente
+
+        uid = meta.get("uid", "")
+        if not se_repite or toda:
+            # Borrar el recurso entero se lleva la serie completa por delante,
+            # así que solo se hace cuando no hay serie o cuando lo ha pedido.
+            resultado = self.calendar.delete_event(meta["href"], meta.get("etag", ""))
+            if not resultado.get("ok"):
+                return f"No he podido cancelar la cita: {resultado.get('motivo', '?')}"
+            self._olvida(uid)
+            return f"Cancelada: {titulo}."
+
+        actual = self.calendar.fetch_event(meta["href"])
+        if not actual.get("ok"):
+            return f"No he podido cancelar la cita: {actual.get('motivo', '?')}"
+
+        recurrencia = _fecha(meta.get("recurrence_id"))
+        ics = actual["ics"]
+        if recurrencia is not None:
+            # Ese día ya tenía excepción: se quita, y además se excluye para
+            # que la serie no lo recupere.
+            ics = ical.remove_vevent(ics, uid, recurrencia) or ics
+        ics = ical.add_exdate(ics, uid, recurrencia or cuando)
+        if ics is None:
+            return "No he encontrado esa cita dentro del fichero del servidor."
+
+        resultado = self.calendar.update_event(meta["href"], actual["etag"], ics)
+        if not resultado.get("ok"):
+            return f"No he podido cancelar la cita: {resultado.get('motivo', '?')}"
+
+        self._reindexa(ics, cuando, cuando, meta["href"], uid,
+                       resultado.get("etag") or actual["etag"])
+        return f"Cancelada: {titulo}, solo la del {cuando:%d/%m}."
+
+    def _olvida(self, uid: str) -> None:
+        if self.store is not None and uid:
+            self.calendar.forget_event(self.store, self.calendar.nombre_calendario, uid)
+            self.bus.emit("sync", source="calendario", nuevos=1)
+
+    def _reindexa(self, ics: str, inicio, fin, href: str = "", uid: str = "",
+                  etag: str = "") -> None:
+        """Deja el índice como quedó el servidor, sin esperar al próximo ciclo."""
+        if self.store is None:
+            return
+        try:
+            if uid:
+                self.calendar.forget_event(
+                    self.store, self.calendar.nombre_calendario, uid)
+            self.calendar.index_event(self.store, ics, inicio, fin, href, etag)
+        except Exception:  # noqa: BLE001 - se arreglará en la próxima sincronización
+            log.exception("la cita se escribió pero no se pudo indexar")
+        self.bus.emit("sync", source="calendario", nuevos=1)
 
     def _tool_estado_del_sistema(self, args: dict) -> str:  # noqa: ARG002
         try:

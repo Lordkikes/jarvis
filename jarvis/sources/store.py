@@ -125,6 +125,25 @@ class Store:
             self._conn.commit()
         return changed
 
+    def delete_prefix(self, prefix: str) -> int:
+        """Borra los items cuyo id empieza así. Devuelve cuántos se fueron.
+
+        Lo usa el calendario: al mover o cancelar una cita hay que quitar del
+        índice las ocurrencias viejas, o la agenda seguiría enseñando una que
+        ya no existe.
+        """
+        if not prefix:
+            return 0
+        patron = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM items WHERE id LIKE ? ESCAPE '\\'", (patron,))
+            if self.fts:
+                self._conn.execute(
+                    "DELETE FROM items_fts WHERE id LIKE ? ESCAPE '\\'", (patron,))
+            self._conn.commit()
+            return cursor.rowcount
+
     # -- lectura -----------------------------------------------------------
     def search(self, query: str, source: str | None = None, limit: int = 8) -> list[dict]:
         terms = _terms(query)
