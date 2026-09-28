@@ -38,16 +38,24 @@ PASOS = {
     "saludo": "saluda y dice la hora",
     "tiempo": "la previsión del día (ciudad opcional)",
     "agenda": "lo que hay hoy en el calendario",
+    "manana": "lo que hay mañana, que es lo que importa por la noche",
     "recordatorios": "los recordatorios de hoy",
     "novedades": "cuántos correos y publicaciones hay desde ayer",
+    "repasar_casa": "qué se ha quedado abierto o sin cerrar",
     "decir": "una frase tuya, tal cual",
     "escena": "pone una escena",
     "encender": "enciende un dispositivo",
+    "apagar": "apaga un dispositivo",
+    "apagar_luces": "apaga todas las luces encendidas",
     "musica": "pone música",
+    "parar_musica": "para lo que esté sonando",
+    "dormir_musica": "para la música dentro de N minutos",
 }
 # Los que hablan componen el parte; los que actúan no narran lo que hacen.
-ACTUAN = ("escena", "encender", "musica")
-CON_ARGUMENTO = ("escena", "encender", "musica", "decir")
+ACTUAN = ("escena", "encender", "apagar", "apagar_luces", "musica",
+          "parar_musica", "dormir_musica")
+CON_ARGUMENTO = ("escena", "encender", "apagar", "musica", "dormir_musica",
+                 "decir")
 
 
 def parse_pasos(valor) -> tuple[list[dict], list[str]]:

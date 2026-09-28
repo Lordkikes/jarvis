@@ -700,12 +700,18 @@ sí lo escribe alguien de fuera.
 | `saludo` | «Buenos días. Son las 07:30 del lunes 28 de septiembre.» |
 | `tiempo[: ciudad]` | La previsión |
 | `agenda` | Lo que hay **hoy**, o que hoy no hay nada |
+| `manana` | Lo que hay **mañana**: por la noche es lo que importa |
 | `recordatorios` | Los de hoy; si no hay, se calla |
 | `novedades` | Cuántos correos, artículos y publicaciones desde ayer |
+| `repasar_casa` | Qué se ha quedado abierto o sin cerrar |
 | `decir: frase` | Una frase tuya, tal cual |
 | `escena: nombre` | Pone una escena |
 | `encender: dispositivo` | Enciende algo |
+| `apagar: dispositivo` | Lo apaga |
+| `apagar_luces` | Apaga todas las luces encendidas |
 | `musica: qué` | Pone música |
+| `parar_musica` | Para lo que esté sonando |
+| `dormir_musica: minutos` | La para dentro de un rato |
 
 **Los que actúan no narran.** A las siete y media nadie quiere oír «hecho:
 modo desayuno», y si la luz no se ha encendido se ve. Lo que hicieron sale en
@@ -715,14 +721,42 @@ la interfaz y en el registro, no por el altavoz.
 tiempo no contesta, el parte sigue con la agenda. Es la diferencia con una
 tirada de herramientas encadenadas, donde el primer error corta.
 
-**Una rutina no abre cerraduras, persianas ni alarmas.** Y no porque la
-confirmación de dos pasos lo frene: dejar armada una propuesta de abrir la
-puerta que nadie ha oído es peor que no intentarlo. Se rechaza antes. Ojo, que
-«encender» una cerradura sí tiene servicio en Home Assistant —`unlock`—; lo
+**Una rutina no toca cerraduras, persianas ni alarmas.** Ni para abrirlas ni
+para cerrarlas, y no porque la confirmación de dos pasos lo frene: dejar
+armada una propuesta de abrir la puerta que nadie ha oído es peor que no
+intentarlo. Se rechaza antes. Ojo, que tanto «encender» como «apagar» tienen
+servicio para una cerradura en Home Assistant —`unlock` y `lock`—; lo
 descubrí escribiendo la prueba que decía lo contrario.
+
+De ahí sale lo que hace el repaso nocturno: **mira y no toca**. Te dice que la
+persiana del salón sigue abierta y decides tú, que igual está así a propósito.
 
 **Media hora tarde ya no es la rutina de la mañana.** Si el equipo estaba
 apagado a su hora, se salta y se recoloca para el día siguiente.
+
+#### La noche es casi lo contrario de la mañana
+
+```
+«a las once y media: dime lo de mañana, repasa la casa, apaga las luces
+ y apaga la música en veinte minutos»
+```
+
+La máquina de las rutinas ya valía tal cual —una rutina de noche es una
+rutina con otra hora—, así que lo que faltaba era el vocabulario de irse a
+dormir, que es casi el opuesto del de levantarse:
+
+- **`manana` en vez de `agenda`.** A las once de la noche, lo que queda de hoy
+  ya no es noticia.
+- **`apagar` y `apagar_luces`.** El segundo toca solo el dominio `light`: un
+  enchufe apagado de madrugada puede ser la nevera.
+- **`repasar_casa`.** Lo que se ha quedado abierto: cerraduras sin echar,
+  persianas subidas, ventanas. Un sensor de movimiento en «on» no cuenta como
+  ventana abierta, que es el fallo fácil aquí. Si no tienes esos dominios
+  autorizados, te lo dice en vez de cantar «todo cerrado», que sería mentira.
+- **`dormir_musica: 20`.** Un temporizador **con encargo**: al vencer para la
+  música y **no dice nada**. Despertarte para anunciarte que ya no suena la
+  música sería absurdo. Funciona también suelto: «apaga la música en media
+  hora».
 
 ```yaml
 tools:
@@ -933,6 +967,8 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
   paras y se pueden posponer.
 - Encadenar rutinas: el parte de la mañana entero al parar el despertador,
   y las luces y la música de paso.
+- Y la de la noche: lo de mañana, el repaso de la casa, las luces fuera y
+  la música apagándose sola.
 - Guardar y leer notas.
 - Llevarte listas de la compra: añadir, tachar y vaciar, hablando.
 - Encender, apagar y consultar lo que tengas en Home Assistant.
