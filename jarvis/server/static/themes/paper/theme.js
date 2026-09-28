@@ -143,6 +143,7 @@
     .on("timer", (e) => addTurn("system", e.message))
     .on("alarma", (e) => addTurn("system", e.message))
     .on("rutina", (e) => addTurn("system", e.message))
+    .on("presencia", (e) => addTurn("system", e.message))
     .on("log", (e) => addTurn("system", e.message))
     .on("muted", (e) => {
       const button = $("btn-mute");

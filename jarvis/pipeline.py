@@ -75,6 +75,7 @@ class Jarvis:
         self._spawn(self._reminder_worker())
         self._spawn(self._alarm_worker())
         self._spawn(self._routine_worker())
+        self._spawn(self._presence_worker())
         try:
             self.capture = AudioCapture(
                 loop=asyncio.get_running_loop(),
@@ -309,6 +310,21 @@ class Jarvis:
             except Exception:  # noqa: BLE001 - un fallo no puede parar el bucle
                 log.exception("fallo revisando las rutinas")
             await asyncio.sleep(30)
+
+    async def _presence_worker(self) -> None:
+        """Y si la casa se ha quedado vacía, o ha dejado de estarlo.
+
+        Medio minuto de retraso al salir no se nota —ya te has ido—, pero al
+        llegar sí: entrar y que las luces tarden medio minuto es peor que
+        encenderlas tú. De ahí los quince segundos, que es lo que tarda uno
+        en subir las escaleras.
+        """
+        while True:
+            try:
+                await self.toolbox.mira_la_presencia()
+            except Exception:  # noqa: BLE001 - un fallo no puede parar el bucle
+                log.exception("fallo mirando la presencia")
+            await asyncio.sleep(15)
 
     async def _sync_worker(self, source) -> None:
         """Sincroniza una fuente cada N minutos, sin tocar la conversación.

@@ -80,6 +80,7 @@
     .on("timer", (e) => addLine("system", "temporizador: " + e.message))
     .on("alarma", (e) => addLine("system", "alarma: " + e.message))
     .on("rutina", (e) => addLine("system", "rutina: " + e.message))
+    .on("presencia", (e) => addLine("system", "casa: " + e.message))
     .on("note", () => addLine("system", "nota guardada"))
     .on("log", (e) => addLine("system", e.message))
     .on("muted", (e) => addLine("system", e.value ? "micrófono apagado" : "micrófono activo"))

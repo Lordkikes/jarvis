@@ -20,7 +20,8 @@ from pathlib import Path
 from ..alarmas import (
     Alarmas, dias_en_palabras, parse_dias, parse_hora,
 )
-from ..rutinas import PASOS, Rutinas, parse_pasos, paso_en_palabras
+from ..presencia import Presencia
+from ..rutinas import PASOS, SUCESOS, Rutinas, parse_pasos, paso_en_palabras
 from ..config import data_path
 from ..domotica import (
     DOMINIOS_DELICADOS, HomeAssistant, SinConexion, dominio_de,
@@ -742,10 +743,12 @@ class Toolbox:
                     "dias": {"type": "string",
                              "description": "«laborables», «diario» o los días, "
                                             "si la quiere a una hora"},
-                    "al_parar_la_alarma": {"type": "boolean", "default": False,
-                                           "description": "En vez de a una "
-                                                          "hora: en cuanto "
-                                                          "apague el despertador"},
+                    "cuando": {"type": "string",
+                               "enum": ["hora", "alarma", "salir", "llegar",
+                                        "mano"],
+                               "description": "Qué la dispara: su hora, parar "
+                                              "el despertador, salir de casa, "
+                                              "llegar, o pedirla"},
                 },
                 "required": ["nombre", "pasos"],
             },
@@ -846,6 +849,9 @@ class Toolbox:
         self.avisar_alarmas = bool(cfg.get("tools.avisos.alarmas", True))
         self.rutinas = Rutinas(
             data_path(cfg.get("tools.routines_file", "data/routines.json")))
+        # Entidades nombradas a mano, no un dominio entero: ver `presencia.py`.
+        self.presencia = Presencia(
+            self.casa, cfg.get("tools.presencia.entidades") or ())
         # Emisoras y listas con nombre propio: lo que resuelve «pon Radio 3».
         self.favoritos = dict(cfg.get("tools.musica.favoritos", {}) or {})
         self.temporizadores = Temporizadores()
@@ -1468,9 +1474,9 @@ class Toolbox:
             return (f"No he entendido ningún paso. Valen: {_y(list(PASOS))}.")
 
         hora = parse_hora(args.get("hora"))
-        por_alarma = bool(args.get("al_parar_la_alarma"))
+        cuando = _sin_tildes(args.get("cuando") or "").strip()
         resultado = self.rutinas.pon(args.get("nombre") or "", pasos, hora,
-                                     parse_dias(args.get("dias")), por_alarma)
+                                     parse_dias(args.get("dias")), cuando)
         if not resultado.get("ok"):
             return f"No he podido: {resultado.get('motivo', '?')}."
 
@@ -1530,9 +1536,13 @@ class Toolbox:
                           + _y([f"«{r['nombre']}»" for r in encontradas]) + ".")
         return encontradas[0], ""
 
+    CUANDO = {"alarma": "Se hace cuando pares el despertador.",
+              "salir": "Se hace cuando la casa se queda vacía.",
+              "llegar": "Se hace cuando llegues a casa."}
+
     def _cuando_la_rutina(self, rutina: dict) -> str:
-        if rutina.get("disparador") == "alarma":
-            return "Se hace cuando pares el despertador."
+        if (dicho := self.CUANDO.get(rutina.get("disparador", ""))):
+            return dicho
         if rutina.get("disparador") == "hora":
             return (f"Se hace a las {rutina['hora']}, "
                     f"{dias_en_palabras(rutina.get('dias', []))}.")
@@ -1547,10 +1557,10 @@ class Toolbox:
         falle no se lleva por delante a los demás, que es justo lo que pasaría
         con una tirada de herramientas encadenadas.
         """
-        dichos = []
+        dichos: list[str] = []
         for paso in rutina.get("pasos", []):
             try:
-                frase = await self._paso_de_rutina(paso)
+                frase = await self._paso_de_rutina(paso, dichos)
             except Exception as exc:  # noqa: BLE001 - un paso no tira la rutina
                 log.exception("fallo en el paso %s", paso.get("que"))
                 self.bus.emit("rutina", message=f"falló «{paso.get('que')}»: {exc}",
@@ -1564,13 +1574,15 @@ class Toolbox:
                       nombre=rutina.get("nombre"), pasos=len(rutina.get("pasos", [])))
         return texto
 
-    async def _paso_de_rutina(self, paso: dict) -> str:
+    async def _paso_de_rutina(self, paso: dict, dichos: list[str]) -> str:
         que, con = paso.get("que", ""), paso.get("con", "")
 
         if que == "saludo":
             return self._saludo()
         if que == "decir":
             return con
+        if que == "al_movil":
+            return self._al_movil(dichos)
         if que == "tiempo":
             return await self._tool_consultar_tiempo({"ciudad": con})
         if que == "agenda":
@@ -1787,6 +1799,44 @@ class Toolbox:
                 await self.on_announce(dicho)
         return len(vencidas)
 
+    def _al_movil(self, dichos: list[str]) -> str:
+        """Manda al bolsillo lo dicho hasta aquí, y no lo repite en voz alta.
+
+        Es el paso que hace útil una rutina de salir: cuando la casa se queda
+        vacía ya no hay nadie delante del altavoz, y enterarte de que te has
+        dejado la ventana abierta sirve de poco a la vuelta.
+        """
+        if not (texto := " ".join(d for d in dichos if d).strip()):
+            return ""
+        if not self.avisos.disponible:
+            return ""
+        self.avisos.envia(texto, "Jarvis")
+        self.bus.emit("rutina", message="Mandado al móvil", paso="al_movil")
+        return ""
+
+    async def mira_la_presencia(self) -> int:
+        """Dispara las rutinas de salir y de llegar. Lo llama la tubería.
+
+        Esta sí habla: quien llega a casa está delante del altavoz. El que
+        sale ya no, y para eso está el paso `al_movil`.
+        """
+        if not self.presencia.disponible:
+            return 0
+        cambio = await asyncio.to_thread(self.presencia.cambio)
+        if not cambio:
+            return 0
+
+        self.bus.emit("presencia", message=("La casa se queda vacía"
+                                            if cambio == "salir"
+                                            else "Alguien ha llegado a casa"),
+                      cambio=cambio)
+        rutinas = self.rutinas.por_disparador(cambio)
+        for rutina in rutinas:
+            dicho = await self.ejecuta_rutina(rutina)
+            if dicho and self.on_announce is not None:
+                await self.on_announce(dicho)
+        return len(rutinas)
+
     async def rutinas_de_la_alarma(self) -> str:
         """Las que esperaban a que pararas el despertador.
 
@@ -1794,7 +1844,7 @@ class Toolbox:
         una respuesta en marcha a la que engancharse. Dos voces a la vez, no.
         """
         dichos = []
-        for rutina in await asyncio.to_thread(self.rutinas.por_alarma):
+        for rutina in self.rutinas.por_disparador("alarma"):
             if (dicho := await self.ejecuta_rutina(rutina)):
                 dichos.append(dicho)
         return " ".join(dichos)
