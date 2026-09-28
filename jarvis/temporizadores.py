@@ -124,7 +124,13 @@ class Temporizadores:
         return min(corriendo) if corriendo else None
 
     # -- modificación ------------------------------------------------------
-    def pon(self, segundos: float, etiqueta: str = "") -> dict:
+    def pon(self, segundos: float, etiqueta: str = "",
+            accion: str = "") -> dict:
+        """`accion` lo convierte en un temporizador que hace algo al vencer.
+
+        Es lo que separa «avísame en diez minutos» de «apaga la música en
+        media hora»: el segundo no tiene que decir nada, solo hacerlo.
+        """
         if segundos > MAX_SEGUNDOS:
             return {"ok": False, "motivo": "no paso de un día"}
         if len(self._vivos) >= MAX_TEMPORIZADORES:
@@ -136,6 +142,7 @@ class Temporizadores:
             "id": uuid.uuid4().hex[:8],
             "etiqueta": (etiqueta or "").strip(),
             "total": segundos,
+            "accion": (accion or "").strip(),
             "vence": self._reloj() + segundos,
             "restante": segundos,
         }

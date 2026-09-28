@@ -367,6 +367,81 @@ class TestPonerHerramienta(CasoConCaja):
         self.assertIn("ya tienes", await self.pon(600, "uno más"))
 
 
+class TestConEncargo(CasoConCaja):
+    """«Apaga la música en media hora» no es «avísame en media hora»."""
+
+    def setUp(self):
+        super().setUp()
+        self.parada = []
+        self.caja._tool_controlar_musica = lambda args: (
+            self.parada.append(args) or "Pausada.")
+
+    async def test_lo_confirma_sin_hablar_de_temporizadores(self):
+        salida = await self.caja.run("poner_temporizador",
+                                     {"segundos": 1800,
+                                      "al_terminar": "parar_musica"})
+        self.assertEqual(salida, "La música se para en 30 minutos.")
+
+    async def test_queda_apuntado_como_los_demas(self):
+        await self.caja.run("poner_temporizador", {"segundos": 1800,
+                                                   "etiqueta": "la música",
+                                                   "al_terminar": "parar_musica"})
+        self.assertIn("la música", await self.caja.run("ver_temporizadores", {}))
+
+    async def test_un_encargo_que_no_existe(self):
+        salida = await self.caja.run("poner_temporizador",
+                                     {"segundos": 60,
+                                      "al_terminar": "hacer el desayuno"})
+        self.assertIn("No sé hacer", salida)
+        self.assertEqual(self.caja.temporizadores.lista(), [])
+
+
+class TestElEncargoSeCumple(CasoConCaja):
+    def setUp(self):
+        super().setUp()
+        self.caja.temporizadores = Temporizadores()  # el reloj de verdad
+        self.parada = []
+        self.caja._tool_controlar_musica = lambda args: (
+            self.parada.append(args) or "Pausada.")
+
+    async def test_al_vencer_para_la_musica(self):
+        self.caja.temporizadores.pon(0.02, "la música", "parar_musica")
+        self.caja._arranca_reloj()
+        await _espera(lambda: self.parada)
+        self.assertEqual(self.parada, [{"accion": "pausa"}])
+
+    async def test_y_no_dice_ni_pio(self):
+        """Despertarte para decir que ya no suena la música es absurdo."""
+        self.caja.temporizadores.pon(0.02, "la música", "parar_musica")
+        self.caja._arranca_reloj()
+        await _espera(lambda: self.parada)
+        await asyncio.sleep(0.05)
+        self.assertEqual(self.dicho, [])
+
+    async def test_pero_deja_rastro_en_la_interfaz(self):
+        cola = self.caja.bus.subscribe()
+        self.caja.temporizadores.pon(0.02, "la música", "parar_musica")
+        self.caja._arranca_reloj()
+        # El aviso sale después de parar la música, y entre las dos cosas hay
+        # un salto de hilo: esperar a `parada` se queda corto.
+        await _espera(lambda: not cola.empty())
+
+        eventos = []
+        while not cola.empty():
+            eventos.append(cola.get_nowait())
+        timers = [e for e in eventos if e["type"] == "timer"]
+        self.assertTrue(timers)
+        for evento in timers:
+            self.assertTrue(evento.get("message"), evento)
+
+    async def test_uno_sin_encargo_sigue_hablando(self):
+        self.caja.temporizadores.pon(0.02, "el arroz")
+        self.caja._arranca_reloj()
+        await _espera(lambda: self.dicho)
+        self.assertEqual(self.dicho, ["Ha terminado el arroz."])
+        self.assertEqual(self.parada, [])
+
+
 class TestVerHerramienta(CasoConCaja):
     async def test_sin_ninguno(self):
         self.assertIn("ningún temporizador",

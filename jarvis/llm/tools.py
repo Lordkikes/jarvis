@@ -143,6 +143,10 @@ class Toolbox:
                 "properties": {
                     "segundos": {"type": "integer", "minimum": 1, "maximum": 86400},
                     "etiqueta": {"type": "string", "description": "Para qué es el aviso"},
+                    "al_terminar": {"type": "string", "enum": ["parar_musica"],
+                                    "description": "Para «apaga la música en "
+                                                   "media hora»: al vencer lo "
+                                                   "hace y no dice nada"},
                 },
                 "required": ["segundos"],
             },
@@ -937,14 +941,21 @@ class Toolbox:
             return "¿De cuánto tiempo lo pongo?"
         etiqueta = (args.get("etiqueta") or "").strip()
 
-        resultado = self.temporizadores.pon(segundos, etiqueta)
+        accion = (args.get("al_terminar") or "").strip()
+        if accion and accion not in self.AL_VENCER:
+            return f"No sé hacer «{accion}» al terminar."
+
+        resultado = self.temporizadores.pon(segundos, etiqueta, accion)
         if not resultado.get("ok"):
             return f"No he podido: {resultado.get('motivo', '?')}."
 
         self._arranca_reloj()
         cuanto = duracion(segundos)
-        dicho = (f"Temporizador de {cuanto} programado para {etiqueta}."
-                 if etiqueta else f"Temporizador de {cuanto} programado.")
+        if accion == "parar_musica":
+            dicho = f"La música se para en {cuanto}."
+        else:
+            dicho = (f"Temporizador de {cuanto} programado para {etiqueta}."
+                     if etiqueta else f"Temporizador de {cuanto} programado.")
         # Los temas pintan `message`: todo evento «timer» tiene que traerlo.
         self.bus.emit("timer", message=dicho, etiqueta=etiqueta,
                       segundos=segundos)
@@ -1101,7 +1112,20 @@ class Toolbox:
                 return  # No queda ninguno; el próximo `pon` vuelve a arrancarlo.
             await asyncio.sleep(min(max(espera, 0.0), 1.0))
 
+    #: Lo que un temporizador puede hacer al vencer en vez de hablar.
+    AL_VENCER = {"parar_musica": lambda caja: caja._tool_controlar_musica(
+        {"accion": "pausa"})}
+
     async def _suena(self, temporizador: dict) -> None:
+        if (hacer := self.AL_VENCER.get(temporizador.get("accion", ""))):
+            # Un temporizador con encargo no habla: si es para dormirse, que
+            # te despierte para decir que ya no suena la música es absurdo.
+            resultado = await asyncio.to_thread(hacer, self)
+            self.bus.emit("timer", message=f"{temporizador['etiqueta'] or ''}: "
+                                           f"{resultado}".strip(": "),
+                          accion=temporizador["accion"])
+            return
+
         # Sin etiqueta se dice «el temporizador» y no «el de diez minutos»:
         # si no lo nombró, es que no había otro con el que confundirlo.
         mensaje = f"Ha terminado {temporizador['etiqueta'] or 'el temporizador'}."
@@ -1539,30 +1563,44 @@ class Toolbox:
             return await self._tool_consultar_tiempo({"ciudad": con})
         if que == "agenda":
             return self._agenda_de_hoy()
+        if que == "manana":
+            return self._agenda_de_manana()
         if que == "recordatorios":
             return self._recordatorios_de_hoy()
         if que == "novedades":
             return self._novedades_en_numeros()
+        if que == "repasar_casa":
+            return self._repaso_de_casa()
 
         # Los que actúan no narran: a las siete y media nadie quiere oír
         # «hecho: modo desayuno», y si la luz no se enciende se ve.
         if que == "escena":
             resultado = self._tool_activar_escena({"cual": con})
         elif que == "encender":
-            resultado = self._enciende_desde_rutina(con)
+            resultado = self._interruptor_de_rutina(con, "encender")
+        elif que == "apagar":
+            resultado = self._interruptor_de_rutina(con, "apagar")
+        elif que == "apagar_luces":
+            resultado = self._apaga_las_luces()
         elif que == "musica":
             resultado = self._tool_poner_musica({"que": con})
+        elif que == "parar_musica":
+            resultado = self._tool_controlar_musica({"accion": "pausa"})
+        elif que == "dormir_musica":
+            resultado = self._duerme_la_musica(con)
         else:
             return ""
         self.bus.emit("rutina", message=f"{que} «{con}»: {resultado}", paso=que)
         return ""
 
-    def _enciende_desde_rutina(self, que: str) -> str:
-        """Una rutina no abre cerraduras ni persianas: eso lo pides tú.
+    def _interruptor_de_rutina(self, que: str, accion: str) -> str:
+        """Una rutina no abre ni cierra cerraduras y persianas: eso lo pides tú.
 
         No basta con que la confirmación de dos pasos lo frene: dejar la
         propuesta armada sin que nadie la haya oído es peor que no intentarlo.
-        Y «encender» una cerradura resulta que sí tiene servicio: `unlock`.
+        Y tanto «encender» como «apagar» tienen servicio para una cerradura:
+        `unlock` y `lock`. Por la noche el segundo hasta suena razonable, y
+        por eso mismo tiene que decidirlo una voz y no una lista.
         """
         entidad = self._dispositivo(que)
         if isinstance(entidad, str):
@@ -1570,8 +1608,74 @@ class Toolbox:
         if dominio_de(entidad.get("entity_id", "")) in DOMINIOS_DELICADOS:
             return (f"«{nombre_de(entidad)}» no se toca desde una rutina; "
                     "eso se pide en voz alta y se confirma.")
-        return self._tool_controlar_dispositivo({"que": que,
-                                                 "accion": "encender"})
+        return self._tool_controlar_dispositivo({"que": que, "accion": accion})
+
+    def _apaga_las_luces(self) -> str:
+        """Solo `light`. Un enchufe apagado de madrugada puede ser la nevera."""
+        if not self.casa.disponible:
+            return "no hay Home Assistant configurado"
+        try:
+            entidades = self.casa.estados(refrescar=True)
+        except SinConexion as exc:
+            return f"no consigo hablar con Home Assistant: {exc}"
+
+        encendidas = [e for e in entidades
+                      if dominio_de(e.get("entity_id", "")) == "light"
+                      and (e.get("state") or "").lower() == "on"]
+        if not encendidas:
+            return "no había ninguna luz encendida"
+        for entidad in encendidas:
+            self.casa.llama("light", "turn_off", entidad["entity_id"])
+        return f"apagadas {len(encendidas)}"
+
+    def _duerme_la_musica(self, minutos: str) -> str:
+        try:
+            cuantos = int(str(minutos).strip())
+        except ValueError:
+            return f"no entiendo «{minutos}» minutos"
+        if cuantos < 1:
+            return "hacen falta minutos de verdad"
+
+        resultado = self.temporizadores.pon(cuantos * 60, "la música",
+                                            "parar_musica")
+        if not resultado.get("ok"):
+            return resultado.get("motivo", "?")
+        self._arranca_reloj()
+        return f"la música se para en {duracion(cuantos * 60)}"
+
+    #: Lo que se repasa antes de dormir. Solo se mira; no se toca nada.
+    VIGILADOS = ("lock", "cover", "binary_sensor")
+    #: Un sensor de movimiento en «on» no es una ventana abierta.
+    ABERTURAS = ("door", "window", "garage_door", "opening")
+
+    def _repaso_de_casa(self) -> str:
+        """Qué se ha quedado abierto. Mirar no es actuar, ni de noche.
+
+        Cerrarlo por su cuenta sería justo lo que una rutina no hace: te lo
+        dice y ya decides tú, que igual la ventana está abierta a propósito.
+        """
+        if not self.casa.disponible:
+            return ""
+        try:
+            entidades = self.casa.estados(refrescar=True)
+        except SinConexion as exc:
+            return f"No consigo repasar la casa: {exc}."
+
+        vigilados = [e for e in entidades
+                     if dominio_de(e.get("entity_id", "")) in self.VIGILADOS
+                     and (dominio_de(e.get("entity_id", "")) != "binary_sensor"
+                          or (e.get("attributes") or {}).get("device_class")
+                          in self.ABERTURAS)]
+        if not vigilados:
+            return ("No tengo puertas ni persianas a la vista; si las quieres "
+                    "en el repaso, añádelas a tools.home_assistant.dominios.")
+
+        abiertos = [nombre_de(e) for e in vigilados
+                    if (e.get("state") or "").lower() in ("on", "open",
+                                                          "unlocked")]
+        if not abiertos:
+            return "Todo cerrado."
+        return "Ojo, que sigue abierto: " + _y(abiertos) + "."
 
     def _saludo(self) -> str:
         ahora = _ahora()
@@ -1601,6 +1705,24 @@ class Toolbox:
         citas = [f"{fila.get('title', '')} a las "
                  f"{(fila.get('created_at') or '')[11:16]}" for fila in filas]
         return "Hoy: " + _y(citas) + "."
+
+    def _agenda_de_manana(self) -> str:
+        """Por la noche, lo que queda de hoy ya no es noticia; mañana sí."""
+        if self.store is None:
+            return "No tengo el calendario indexado."
+        manana = (_ahora() + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        filas = self.store.upcoming(
+            source="calendario",
+            since=manana.astimezone(timezone.utc).isoformat(timespec="seconds"),
+            until=(manana + timedelta(days=1)).astimezone(
+                timezone.utc).isoformat(timespec="seconds"),
+            limit=6)
+        if not filas:
+            return "Mañana no tienes nada en el calendario."
+        citas = [f"{fila.get('title', '')} a las "
+                 f"{(fila.get('created_at') or '')[11:16]}" for fila in filas]
+        return "Mañana: " + _y(citas) + "."
 
     def _recordatorios_de_hoy(self) -> str:
         """Si no hay ninguno se calla: la ausencia de noticias no es noticia."""
