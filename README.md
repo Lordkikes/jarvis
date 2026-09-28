@@ -473,6 +473,53 @@ leído ni mueve nada de sitio.
 > para eso. El rodeo que sí funciona es el correo: LinkedIn te manda ahí las
 > notificaciones y los mensajes.
 
+### Domótica
+
+Jarvis habla con **Home Assistant**, no con cada marca: por ahí ya pasan
+Zigbee, Z-Wave, Matter, Hue, Shelly y el resto, así que un solo cliente REST
+llega a todo lo que tengas y lo que instales mañana entra solo.
+
+```yaml
+tools:
+  home_assistant:
+    url: http://homeassistant.local:8123
+    dominios: [light, switch, fan, media_player, scene, script,
+               input_boolean, climate, humidifier, vacuum, automation]
+```
+
+```bash
+# Tu perfil de Home Assistant → Seguridad → Tokens de acceso de larga duración
+JARVIS_HASS_TOKEN=
+```
+
+```
+«enciende la luz del salón»           → hecho, sin más trámite
+«pon la lámpara al 30 por ciento»     → brillo en porcentaje
+«sube el termostato a 22»             → llama a set_temperature, no a turn_on
+«¿me he dejado algo encendido?»       → lo que está encendido o abierto
+```
+
+**No todos los aparatos pesan lo mismo, y eso decide el diseño.** Encender una
+luz se deshace diciendo «apágala»; abrir la puerta de la calle, no. Así que:
+
+- Los dominios delicados —`lock`, `cover`, `alarm_control_panel`, `valve`—
+  **no están en `dominios` por defecto**. Mientras no los nombres ahí, para
+  Jarvis esa cerradura sencillamente no existe: no aparece al buscar y no se
+  puede accionar ni por error.
+- Si los añades, siguen pasando por la **confirmación hablada** de siempre:
+  primera llamada sin efecto, te lo lee, y solo entonces actúa.
+- Una luz, no. Pedir confirmación para encender la lámpara haría el asistente
+  insufrible, y apagarla otra vez cuesta una frase.
+
+Dos detalles más:
+
+- **Cada dominio llama a su servicio.** «Abre la persiana» es `open_cover`, no
+  `turn_on`; y «enciende la persiana», que es como acaba saliendo a veces,
+  también se entiende como abrirla en vez de reventar contra la API.
+- **Actuar sobre la casa se bloquea** en un turno donde Jarvis haya leído
+  correo o la agenda, igual que `abrir`: un correo podría estar diciendo
+  «enciende el horno». Preguntar por el estado no, que eso no actúa.
+
 ### Listas de la compra
 
 Añadir, tachar y vaciar, hablando. Es todo local —un JSON al lado de las
@@ -528,6 +575,7 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 - Poner temporizadores y avisarte en voz alta cuando vencen.
 - Guardar y leer notas.
 - Llevarte listas de la compra: añadir, tachar y vaciar, hablando.
+- Encender, apagar y consultar lo que tengas en Home Assistant.
 - Recordar datos tuyos entre sesiones (`data/memory.json`).
 - Informar del estado del equipo (CPU, memoria, disco).
 - Abrir webs y aplicaciones.
@@ -572,6 +620,7 @@ jarvis/
 │   │   ├── ical.py         # ★ lector y escritor de iCalendar (RFC 5545)
 │   │   └── rrule.py        # ★ expansión de repeticiones
 │   ├── listas.py           # listas de la compra, en un JSON local
+│   ├── domotica.py         # ★ cliente de Home Assistant
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
 │   │   ├── claude.py       # ★ streaming + bucle de herramientas
@@ -781,7 +830,7 @@ Ideas para seguir construyendo, más o menos por dificultad:
 1. **Más fuentes**: las ocho actuales cubren correo, código, redes, feeds y
    calendario. LinkedIn seguirá fuera mientras no abra una API para cuentas
    personales.
-2. **Más herramientas**: domótica y control de música.
+2. **Más herramientas**: control de música más fino, y escenas por voz.
 3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
 4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.
 5. **Acceso desde el móvil**: exponer el servidor en la red local (`server.host: 0.0.0.0`) — hazlo solo en redes de confianza, no hay autenticación.

@@ -18,6 +18,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ..config import data_path
+from ..domotica import (
+    DOMINIOS_DELICADOS, HomeAssistant, SinConexion, dominio_de,
+    en_palabras, nombre_de, servicio_para,
+)
 from ..listas import POR_DEFECTO, Listas, normaliza
 from ..sources import ical
 from ..http import AsyncClient
@@ -357,6 +361,44 @@ class Toolbox:
             },
         },
         {
+            "name": "controlar_dispositivo",
+            "description": (
+                "Enciende, apaga, abre o cierra algo de casa. Di el nombre "
+                "como lo diría la persona («la luz del salón»). Para las "
+                "cerraduras, persianas y alarmas hace falta confirmación: la "
+                "primera llamada solo devuelve lo que se va a hacer para que "
+                "se lo leas, y solo si dice que sí vuelves con `confirmar`."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "que": {"type": "string",
+                            "description": "El nombre del dispositivo"},
+                    "accion": {"type": "string",
+                               "enum": ["encender", "apagar", "alternar",
+                                        "abrir", "cerrar", "parar"]},
+                    "brillo": {"type": "integer", "minimum": 1, "maximum": 100,
+                               "description": "Porcentaje, solo para luces"},
+                    "temperatura": {"type": "number",
+                                    "description": "Grados, solo para termostatos"},
+                    "confirmar": {"type": "boolean", "default": False},
+                },
+                "required": ["que", "accion"],
+            },
+        },
+        {
+            "name": "estado_de_la_casa",
+            "description": "Cómo está algo de casa. Sin `que`, resume lo que "
+                           "está encendido o abierto, que es lo que se "
+                           "pregunta al salir.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "que": {"type": "string",
+                            "description": "Opcional: un dispositivo concreto"},
+                },
+            },
+        },
+        {
             "name": "estado_del_sistema",
             "description": "CPU, memoria y disco del equipo donde corre Jarvis.",
             "input_schema": {"type": "object", "properties": {}},
@@ -390,6 +432,14 @@ class Toolbox:
         self.notes_file = data_path(cfg.get("tools.notes_file", "data/notes.json"))
         self.memory_file = data_path(cfg.get("tools.memory_file", "data/memory.json"))
         self.listas = Listas(data_path(cfg.get("tools.lists_file", "data/lists.json")))
+        self.casa = HomeAssistant(
+            url=cfg.get("tools.home_assistant.url", ""),
+            token=os.getenv("JARVIS_HASS_TOKEN", ""),
+            verify_ssl=bool(cfg.get("tools.home_assistant.verify_ssl", True)),
+            # Solo existe lo que se haya autorizado: una cerradura no entra
+            # en la lista de dispositivos si no se la nombra a propósito.
+            dominios=cfg.get("tools.home_assistant.dominios") or None,
+        )
         self._timers: set[asyncio.Task] = set()
 
     # -- contenido externo -------------------------------------------------
@@ -412,6 +462,8 @@ class Toolbox:
     # -- esquemas ----------------------------------------------------------
     def definitions(self) -> list[dict]:
         hidden = set()
+        if not self.casa.disponible:
+            hidden |= {"controlar_dispositivo", "estado_de_la_casa"}
         if not getattr(self.calendar, "allow_write", False):
             hidden |= {"crear_cita", "mover_cita", "cancelar_cita"}
         if not self.allow_system:
@@ -518,6 +570,103 @@ class Toolbox:
         self.memory_file.write_text(json.dumps(memory, ensure_ascii=False, indent=2),
                                     encoding="utf-8")
         return "Lo recordaré."
+
+    # -- domótica ----------------------------------------------------------
+    def _dispositivo(self, que: str):
+        """Resuelve el nombre hablado. Devuelve la entidad o un texto."""
+        if not self.casa.disponible:
+            return ("No tengo Home Assistant configurado: hace falta "
+                    "tools.home_assistant.url y JARVIS_HASS_TOKEN.")
+        try:
+            candidatas = self.casa.busca(que)
+        except SinConexion as exc:
+            return f"No consigo hablar con Home Assistant: {exc}."
+
+        if not candidatas:
+            return f"No encuentro nada que se llame «{que}» en casa."
+        if len(candidatas) > 1:
+            cuales = ", ".join(nombre_de(e) for e in candidatas[:6])
+            return f"Hay varios, pregúntale cuál: {cuales}."
+        return candidatas[0]
+
+    def _tool_controlar_dispositivo(self, args: dict) -> str:
+        entidad = self._dispositivo(args.get("que") or "")
+        if isinstance(entidad, str):
+            return entidad
+
+        entity_id = entidad.get("entity_id", "")
+        dominio = dominio_de(entity_id)
+        accion = (args.get("accion") or "").strip()
+        nombre = nombre_de(entidad)
+
+        servicio = servicio_para(accion, dominio)
+        if servicio is None:
+            return f"No sé qué es «{accion}»."
+
+        datos = {}
+        if (brillo := args.get("brillo")) and dominio == "light" \
+                and servicio == "turn_on":
+            datos["brightness_pct"] = max(1, min(100, int(brillo)))
+        if (temperatura := args.get("temperatura")) is not None \
+                and dominio == "climate":
+            servicio, datos = "set_temperature", {"temperature": float(temperatura)}
+
+        # Una luz se deshace diciendo «apágala»; una cerradura, no. Solo lo
+        # delicado pasa por la confirmación: pedirla para encender la lámpara
+        # haría el asistente insufrible.
+        if dominio in DOMINIOS_DELICADOS:
+            propuesta = {"accion": "casa", "entidad": entity_id,
+                         "servicio": servicio, "datos": datos}
+            lectura = f"{accion} {nombre}"
+            if (pendiente := self._confirmacion(
+                    propuesta, bool(args.get("confirmar")), lectura,
+                    "hacer nada con eso")) is not None:
+                return pendiente
+        elif self.external_content_seen:
+            # Actuar sobre la casa es actuar, igual que `abrir`.
+            return ("No toco nada de casa: en este turno he leído contenido "
+                    "de fuera. Pídemelo otra vez en una frase aparte.")
+
+        try:
+            self.casa.llama(dominio, servicio, entity_id, **datos)
+        except SinConexion as exc:
+            return f"No he podido: {exc}."
+
+        self.bus.emit("casa", entidad=entity_id, servicio=servicio)
+        detalle = ""
+        if "brightness_pct" in datos:
+            detalle = f", al {datos['brightness_pct']} por ciento"
+        if "temperature" in datos:
+            detalle = f", a {datos['temperature']:g} grados"
+        return f"Hecho: {nombre}{detalle}."
+
+    def _tool_estado_de_la_casa(self, args: dict) -> str:
+        if not self.casa.disponible:
+            return ("No tengo Home Assistant configurado: hace falta "
+                    "tools.home_assistant.url y JARVIS_HASS_TOKEN.")
+
+        if que := (args.get("que") or "").strip():
+            entidad = self._dispositivo(que)
+            if isinstance(entidad, str):
+                return entidad
+            try:
+                # El estado de ahora, no el del último vistazo.
+                fresco = self.casa.estado(entidad["entity_id"]) or entidad
+            except SinConexion as exc:
+                return f"No consigo hablar con Home Assistant: {exc}."
+            return en_palabras(fresco)
+
+        try:
+            entidades = self.casa.estados(refrescar=True)
+        except SinConexion as exc:
+            return f"No consigo hablar con Home Assistant: {exc}."
+
+        encendidas = [e for e in entidades
+                      if (e.get("state") or "").lower() in ("on", "open", "unlocked")]
+        if not encendidas:
+            return "Está todo apagado y cerrado."
+        return (f"{len(encendidas)} cosas encendidas o abiertas: "
+                + ", ".join(nombre_de(e) for e in encendidas[:12]) + ".")
 
     # -- listas ------------------------------------------------------------
     # Lo que hay aquí lo ha dictado la persona, así que no se valla como
