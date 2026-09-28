@@ -25,6 +25,9 @@ from ..domotica import (
 from ..avisos import Avisos, Ntfy
 from ..escenas import DOMINIOS as DOMINIOS_ESCENA, Escenas, instantanea
 from ..listas import POR_DEFECTO, Listas, normaliza
+from ..recordatorios import (
+    MENSUAL, REPETICIONES, Recordatorios,
+)
 from ..musica import (
     ACCIONES, SERVICIO_MASS, TIPOS_MASS, Biblioteca, Local,
     busca as busca_reproductor, busca_favorito, desde_home_assistant,
@@ -517,6 +520,52 @@ class Toolbox:
             },
         },
         {
+            "name": "poner_recordatorio",
+            "description": (
+                "Recuerda algo para una fecha y hora concretas, aunque sea "
+                "dentro de días: sobrevive a reinicios. Para «dentro de diez "
+                "minutos» usa `poner_temporizador`, que es más directo."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "texto": {"type": "string",
+                              "description": "Qué hay que recordarle, con sus "
+                                             "palabras"},
+                    "cuando": {"type": "string",
+                               "description": "Fecha y hora locales en ISO "
+                                              "8601, p. ej. 2026-09-29T09:00"},
+                    "repetir": {"type": "string",
+                                "enum": ["diario", "semanal", "mensual"],
+                                "description": "Opcional, si lo quiere cada día"},
+                },
+                "required": ["texto", "cuando"],
+            },
+        },
+        {
+            "name": "ver_recordatorios",
+            "description": "Los recordatorios pendientes, del más próximo al "
+                           "más lejano. Dice también si se perdió alguno.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "limite": {"type": "integer", "default": 10, "maximum": 20},
+                },
+            },
+        },
+        {
+            "name": "borrar_recordatorio",
+            "description": "Quita un recordatorio pendiente. Di parte de su "
+                           "texto, como lo diría la persona.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "cual": {"type": "string"},
+                    "confirmar": {"type": "boolean", "default": False},
+                },
+                "required": ["cual"],
+            },
+        },
+        {
             "name": "estado_del_sistema",
             "description": "CPU, memoria y disco del equipo donde corre Jarvis.",
             "input_schema": {"type": "object", "properties": {}},
@@ -573,6 +622,8 @@ class Toolbox:
         self.biblioteca = Biblioteca(cfg.get("tools.musica.biblioteca", ""))
         self.escenas = Escenas(data_path(cfg.get("tools.scenes_file",
                                                  "data/scenes.json")))
+        self.recordatorios = Recordatorios(
+            data_path(cfg.get("tools.reminders_file", "data/reminders.json")))
         # Emisoras y listas con nombre propio: lo que resuelve «pon Radio 3».
         self.favoritos = dict(cfg.get("tools.musica.favoritos", {}) or {})
         self._timers: set[asyncio.Task] = set()
@@ -717,6 +768,99 @@ class Toolbox:
             return (f"Avisado por {', '.join(resultado['llegaron'])}, "
                     f"pero falló {'; '.join(resultado['fallaron'])}.")
         return f"Avisado por {', '.join(resultado['llegaron'])}."
+
+    # -- recordatorios ------------------------------------------------------
+    def _tool_poner_recordatorio(self, args: dict) -> str:
+        texto = (args.get("texto") or "").strip()
+        if not texto:
+            return "¿Qué le recuerdo?"
+        cuando = _fecha(args.get("cuando"))
+        if cuando is None:
+            return ("No entiendo esa fecha. Dámela en ISO 8601, "
+                    "por ejemplo 2026-09-29T09:00.")
+        if cuando <= _ahora():
+            return "Esa hora ya ha pasado. ¿Para cuándo lo quiere?"
+
+        repetir = (args.get("repetir") or "").strip()
+        resultado = self.recordatorios.pon(texto, cuando, repetir)
+        if not resultado.get("ok"):
+            return f"No he podido: {resultado.get('motivo', '?')}."
+
+        self.bus.emit("recordatorio", texto=texto,
+                      cuando=cuando.isoformat(timespec="minutes"))
+        cadencia = f", {repetir}" if resultado["recordatorio"]["repetir"] else ""
+        return (f"Apuntado: {texto}, el "
+                f"{self._fecha_hablada(cuando)}{cadencia}.")
+
+    def _tool_ver_recordatorios(self, args: dict) -> str:
+        limite = max(1, min(20, int(args.get("limite", 10) or 10)))
+        pendientes = self.recordatorios.pendientes()[:limite]
+        perdidos = self.recordatorios.perdidos()
+
+        if not pendientes:
+            if perdidos:
+                return (f"No queda ninguno pendiente, pero se perdieron "
+                        f"{len(perdidos)} mientras estaba apagado.")
+            return "No tienes recordatorios."
+
+        lineas = []
+        for recordatorio in pendientes:
+            cuando = _fecha(recordatorio.get("cuando"))
+            cadencia = (f" ({recordatorio['repetir']})"
+                        if recordatorio.get("repetir") else "")
+            lineas.append(f"{recordatorio.get('texto', '')}, el "
+                          f"{self._fecha_hablada(cuando)}{cadencia}"
+                          if cuando else recordatorio.get("texto", ""))
+        texto = "; ".join(lineas) + "."
+        if perdidos:
+            texto += f" Además se perdieron {len(perdidos)} estando apagado."
+        return texto
+
+    def _tool_borrar_recordatorio(self, args: dict) -> str:
+        cual = (args.get("cual") or "").strip()
+        if not cual:
+            return "¿Cuál borro?"
+        if not (encontrados := self.recordatorios.busca(cual)):
+            return f"No tengo ningún recordatorio que diga «{cual}»."
+        if len(encontrados) > 1:
+            cuales = "; ".join(r.get("texto", "") for r in encontrados[:5])
+            return f"Hay varios que encajan, pregúntale cuál: {cuales}."
+
+        recordatorio = encontrados[0]
+        cuando = _fecha(recordatorio.get("cuando"))
+        propuesta = {"accion": "borrar_recordatorio", "id": recordatorio["id"]}
+        lectura = (f"borrar el recordatorio «{recordatorio.get('texto', '')}»"
+                   + (f" del {self._fecha_hablada(cuando)}" if cuando else ""))
+        if (pendiente := self._confirmacion(propuesta, bool(args.get("confirmar")),
+                                            lectura, "borrar")) is not None:
+            return pendiente
+
+        self.recordatorios.borra(recordatorio["id"])
+        return f"Borrado: {recordatorio.get('texto', '')}."
+
+    async def dispara_recordatorios(self) -> int:
+        """Avisa de los que tocan. Lo llama el bucle de la tubería.
+
+        Se marcan antes de avisar, no después: más vale callar uno si algo
+        falla al decirlo que soltarlo en bucle cada treinta segundos.
+        """
+        vencidos = await asyncio.to_thread(self.recordatorios.vencidos)
+        for recordatorio in vencidos:
+            texto = recordatorio.get("texto", "")
+            retraso = recordatorio.get("retraso", 0)
+            mensaje = f"Recordatorio: {texto}."
+            if retraso > 120:
+                minutos = int(retraso // 60)
+                cuanto = (f"{minutos} minutos" if minutos < 90
+                          else f"{minutos // 60} horas")
+                mensaje = f"Recordatorio con {cuanto} de retraso: {texto}."
+
+            self.bus.emit("recordatorio", texto=texto, vencido=True)
+            if self.on_announce is not None:
+                await self.on_announce(mensaje)
+            if self.avisos.disponible:
+                await asyncio.to_thread(self.avisos.envia, mensaje, "Recordatorio")
+        return len(vencidos)
 
     def _tool_guardar_nota(self, args: dict) -> str:
         notes = _json_store(self.notes_file)

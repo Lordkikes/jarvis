@@ -520,6 +520,38 @@ Dos detalles más:
   correo o la agenda, igual que `abrir`: un correo podría estar diciendo
   «enciende el horno». Preguntar por el estado no, que eso no actúa.
 
+### Recordatorios
+
+```
+«recuérdame mañana a las nueve llamar al fontanero»
+«recuérdame todos los días a las ocho tomar la pastilla»
+«¿qué tengo apuntado?»
+```
+
+**No son temporizadores, y la diferencia importa.** Un temporizador es un
+`sleep` que muere con el proceso; un recordatorio es para el jueves y tiene
+que seguir ahí aunque reinicies tres veces por medio. Así que viven en
+`data/reminders.json` y un bucle los mira cada treinta segundos.
+
+De ahí sale la decisión menos evidente: **qué hacer con los que vencieron
+mientras Jarvis estaba apagado.** Soltarlos todos de golpe al arrancar es una
+avalancha inútil; tragárselos en silencio es peor, porque para eso no lo
+habrías pedido. Así que:
+
+- Los de las **últimas 24 horas** se dicen, avisando del retraso: «recordatorio
+  con 40 minutos de retraso: llamar al fontanero».
+- Los **más viejos** se marcan como perdidos y se cuentan cuando preguntes por
+  los pendientes. No te despierta con el de anteayer.
+- Uno que **se repite** y lleva diez días sin sonar no encadena las diez veces
+  que se perdió: se adelanta a la próxima que queda por delante.
+
+Se sondea en vez de programar un `sleep` por cada uno porque son absolutos y
+persistentes: pueden venir de otra ejecución, puedes editar el fichero a mano,
+y dormir hasta pasado mañana se lleva mal con los cambios de hora.
+
+> Si tienes los avisos al móvil configurados, un recordatorio suena también
+> ahí, igual que los temporizadores.
+
 ### Avisos al móvil
 
 Dos caminos, y si tienes los dos se manda por los dos: un aviso que no llega
@@ -718,6 +750,7 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 - Decir la fecha y la hora.
 - Consultar el tiempo de cualquier ciudad (Open-Meteo, sin clave).
 - Poner temporizadores y avisarte cuando vencen, en voz alta y en el móvil.
+- Recordarte cosas a una hora concreta, aunque reinicies o sea para el jueves.
 - Guardar y leer notas.
 - Llevarte listas de la compra: añadir, tachar y vaciar, hablando.
 - Encender, apagar y consultar lo que tengas en Home Assistant.
@@ -772,6 +805,7 @@ jarvis/
 │   ├── domotica.py         # ★ cliente de Home Assistant
 │   ├── escenas.py          # escenas propias, con su instantánea
 │   ├── avisos.py           # notificaciones al móvil (ntfy / Home Assistant)
+│   ├── recordatorios.py    # lo que hay que decir a una hora concreta
 │   ├── musica.py           # altavoces de casa y reproductor del equipo
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
