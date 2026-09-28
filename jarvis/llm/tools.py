@@ -24,8 +24,9 @@ from ..domotica import (
 )
 from ..listas import POR_DEFECTO, Listas, normaliza
 from ..musica import (
-    ACCIONES, Local, desde_home_assistant, elige, en_palabras as suena_en_palabras,
-    busca as busca_reproductor,
+    ACCIONES, SERVICIO_MASS, TIPOS_MASS, Biblioteca, Local,
+    busca as busca_reproductor, busca_favorito, desde_home_assistant,
+    elige, en_palabras as suena_en_palabras,
 )
 from ..sources import ical
 from ..http import AsyncClient
@@ -425,6 +426,28 @@ class Toolbox:
             },
         },
         {
+            "name": "poner_musica",
+            "description": (
+                "Pone algo que no estaba sonando: una canción, un disco, un "
+                "artista o una emisora. Di lo que ha pedido tal cual («Queen», "
+                "«Bohemian Rhapsody de Queen», «Radio 3»). Para pausar o "
+                "saltar de canción usa `controlar_musica`."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "que": {"type": "string",
+                            "description": "Lo que ha pedido, con sus palabras"},
+                    "donde": {"type": "string",
+                              "description": "Opcional: el altavoz o el "
+                                             "reproductor"},
+                    "tipo": {"type": "string", "enum": list(TIPOS_MASS),
+                             "description": "Opcional, si está claro que pide "
+                                            "un disco, un artista o una emisora"},
+                },
+                "required": ["que"],
+            },
+        },
+        {
             "name": "que_suena",
             "description": "Qué se está reproduciendo y dónde.",
             "input_schema": {
@@ -475,6 +498,9 @@ class Toolbox:
             dominios=cfg.get("tools.home_assistant.dominios") or None,
         )
         self.local = Local(cfg.get("tools.playerctl", "playerctl"))
+        self.biblioteca = Biblioteca(cfg.get("tools.musica.biblioteca", ""))
+        # Emisoras y listas con nombre propio: lo que resuelve «pon Radio 3».
+        self.favoritos = dict(cfg.get("tools.musica.favoritos", {}) or {})
         self._timers: set[asyncio.Task] = set()
 
     # -- contenido externo -------------------------------------------------
@@ -500,7 +526,7 @@ class Toolbox:
         if not self.casa.disponible:
             hidden |= {"controlar_dispositivo", "estado_de_la_casa"}
         if not (self.casa.disponible or self.local.disponible):
-            hidden |= {"controlar_musica", "que_suena"}
+            hidden |= {"controlar_musica", "que_suena", "poner_musica"}
         if not getattr(self.calendar, "allow_write", False):
             hidden |= {"crear_cita", "mover_cita", "cancelar_cita"}
         if not self.allow_system:
@@ -706,24 +732,30 @@ class Toolbox:
                 + ", ".join(nombre_de(e) for e in encendidas[:12]) + ".")
 
     # -- música ------------------------------------------------------------
-    def _reproductores(self) -> list[dict]:
-        """Los altavoces de casa y el reproductor del equipo, en una lista."""
+    def _reproductores(self, incluir_apagados: bool = False) -> list[dict]:
+        """Los altavoces de casa y el reproductor del equipo, en una lista.
+
+        Los apagados no cuentan para «pausa» —no tiene sentido pausar el
+        televisor apagado— pero sí para «pon música en el salón», que es
+        justamente encenderlo.
+        """
         candidatos = []
         if self.casa.disponible:
             try:
                 candidatos += [desde_home_assistant(e) for e in
                                self.casa.estados(refrescar=True)
                                if dominio_de(e.get("entity_id", "")) == "media_player"
-                               and (e.get("state") or "").lower() != "off"]
+                               and (incluir_apagados
+                                    or (e.get("state") or "").lower() != "off")]
             except SinConexion as exc:
                 log.debug("Home Assistant no contesta para la música (%s)", exc)
         if self.local.disponible and (suyo := self.local.estado()):
             candidatos.append(suyo)
         return candidatos
 
-    def _reproductor(self, donde: str):
+    def _reproductor(self, donde: str, incluir_apagados: bool = False):
         """El reproductor del que se habla, o un texto explicando por qué no."""
-        candidatos = self._reproductores()
+        candidatos = self._reproductores(incluir_apagados)
         if not candidatos:
             if not (self.casa.disponible or self.local.disponible):
                 return ("No tengo ni Home Assistant ni playerctl: no puedo "
@@ -776,6 +808,83 @@ class Toolbox:
         if accion == "volumen":
             return f"{reproductor['nombre']} al {volumen} por ciento."
         return f"Hecho en {reproductor['nombre']}."
+
+    def _tool_poner_musica(self, args: dict) -> str:
+        que = (args.get("que") or "").strip()
+        if not que:
+            return "¿Qué pongo?"
+        if self.external_content_seen:
+            return ("No pongo música: en este turno he leído contenido de "
+                    "fuera. Pídemelo otra vez en una frase aparte.")
+
+        # Para poner algo nuevo, un altavoz apagado sí es un destino válido.
+        reproductor = self._reproductor((args.get("donde") or "").strip(),
+                                        incluir_apagados=True)
+        if isinstance(reproductor, str):
+            return reproductor
+
+        # 1) Un favorito es una emisora concreta, no una búsqueda: manda.
+        if (favorito := busca_favorito(self.favoritos, que)) is not None:
+            nombre, url = favorito
+            if self._pon_url(reproductor, url) is False:
+                return f"No he podido poner {nombre}."
+            self.bus.emit("musica", donde=reproductor["nombre"], puesto=nombre)
+            return f"{nombre}, en {reproductor['nombre']}."
+
+        # 2) Music Assistant es la única vía que busca de verdad.
+        if reproductor["fuente"] == "home_assistant" and self._hay_music_assistant():
+            datos = {"media_id": que}
+            if tipo := (args.get("tipo") or "").strip():
+                datos["media_type"] = tipo
+            try:
+                self.casa.llama("music_assistant", "play_media",
+                                reproductor["entity_id"], **datos)
+            except SinConexion as exc:
+                return (f"Music Assistant no ha podido con «{que}»: {exc}. "
+                        f"¿Es {reproductor['nombre']} un altavoz suyo?")
+            self.bus.emit("musica", donde=reproductor["nombre"], puesto=que)
+            return f"Buscando «{que}» en {reproductor['nombre']}."
+
+        # 3) La carpeta de música, para quien no tenga Music Assistant.
+        if reproductor["fuente"] == "local" and self.biblioteca.disponible:
+            if not (encontrados := self.biblioteca.busca(que)):
+                return f"No encuentro «{que}» en tu carpeta de música."
+            if not self.local.abre(encontrados[0].as_uri(),
+                                   reproductor.get("nombre", "")):
+                return "El reproductor no ha querido abrirlo."
+            self.bus.emit("musica", donde=reproductor["nombre"],
+                          puesto=encontrados[0].name)
+            return f"{encontrados[0].stem}, en {reproductor['nombre']}."
+
+        return self._no_se_puede_buscar(reproductor)
+
+    def _pon_url(self, reproductor: dict, url: str):
+        """Pone una URL donde toque: por Home Assistant o por el reproductor."""
+        if reproductor["fuente"] == "local":
+            return self.local.abre(url, reproductor.get("nombre", ""))
+        try:
+            self.casa.llama("media_player", "play_media",
+                            reproductor["entity_id"],
+                            media_content_id=url, media_content_type="music")
+        except SinConexion:
+            return False
+        return True
+
+    def _hay_music_assistant(self) -> bool:
+        try:
+            return SERVICIO_MASS in self.casa.servicios()
+        except SinConexion:
+            return False
+
+    def _no_se_puede_buscar(self, reproductor: dict) -> str:
+        """Decir qué falta es más útil que decir que no se puede."""
+        if reproductor["fuente"] == "local":
+            return ("Para buscar canciones en el equipo hace falta una carpeta "
+                    "en tools.musica.biblioteca. También puedo poner lo que "
+                    "tengas en tools.musica.favoritos.")
+        return ("Ese altavoz no busca por su cuenta: hace falta Music "
+                "Assistant en Home Assistant, o tener lo que quieras en "
+                "tools.musica.favoritos.")
 
     def _tool_que_suena(self, args: dict) -> str:
         reproductor = self._reproductor((args.get("donde") or "").strip())

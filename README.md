@@ -538,6 +538,7 @@ Dos caminos, y Jarvis elige solo:
 «pon el volumen al 30»         → porcentaje, aquí y en Home Assistant
 «¿qué suena?»                  → título, artista, dónde y a qué volumen
 «pausa el spotify»             → a ese, aunque suene otra cosa en el salón
+«pon Bohemian Rhapsody»        → busca y reproduce (más abajo)
 ```
 
 **Lo que no es evidente es a quién le hablas cuando no lo dices.** Si hay un
@@ -550,6 +551,48 @@ digas; y si dos encajan, pregunta.
 > `playerctl` se llama como binario y no hablando D-Bus directamente para no
 > arrastrar otra dependencia de Python: así es opcional de verdad, no un
 > requisito disfrazado.
+
+#### Pedir una canción concreta
+
+Poner algo que no estaba sonando es otro problema: hay que **buscarlo**, y
+ninguna vía sirve para todo el mundo. Se prueban tres por orden.
+
+**1. Favoritos.** Un nombre y una dirección en `config.yaml`. Es lo que
+resuelve «pon Radio 3», que no es una búsqueda sino una emisora concreta, y
+funciona con cualquier altavoz sin instalar nada.
+
+```yaml
+tools:
+  musica:
+    favoritos:
+      Radio 3: https://crtaudio.rtve.es/resources/radio3.mp3
+      Mi lista: spotify:playlist:37i9dQZF1DXcBWIGoYBM5M
+```
+
+**2. Music Assistant.** Si lo tienes en Home Assistant, su acción
+`play_media` acepta **texto libre** y busca en todo lo que tengas dado de
+alta —Spotify, la biblioteca, lo que sea—. Es la única vía que busca de
+verdad, así que cuando está, manda. No hay que configurarla: Jarvis mira si
+el servicio existe y ya.
+
+**3. Una carpeta de música.** Para quien no tenga Music Assistant:
+
+```yaml
+tools:
+  musica:
+    biblioteca: ~/Música
+```
+
+Se recorre la carpeta y se busca por la **ruta del fichero** —no se leen las
+etiquetas ID3, que pedirían otra dependencia—; en la práctica quien tiene una
+carpeta de música la tiene ordenada por artista y disco, así que la ruta ya
+dice lo que hace falta. Gana la ruta más corta, para que «Bohemian Rhapsody»
+dé la canción del disco y no la versión en directo del recopilatorio de tres.
+Luego se abre en el reproductor del equipo con `playerctl open`.
+
+> Si no hay ninguna de las tres, Jarvis **dice cuál falta** en vez de decir
+> que no puede. Y si el altavoz elegido no es de Music Assistant, lo nombra:
+> «¿es la Televisión un altavoz suyo?».
 
 ### Listas de la compra
 
@@ -607,7 +650,8 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 - Guardar y leer notas.
 - Llevarte listas de la compra: añadir, tachar y vaciar, hablando.
 - Encender, apagar y consultar lo que tengas en Home Assistant.
-- Manejar la música: pausar, saltar de canción y subir el volumen.
+- Manejar la música: pausar, saltar de canción, subir el volumen y poner
+  algo concreto que le pidas.
 - Recordar datos tuyos entre sesiones (`data/memory.json`).
 - Informar del estado del equipo (CPU, memoria, disco).
 - Abrir webs y aplicaciones.
@@ -863,8 +907,8 @@ Ideas para seguir construyendo, más o menos por dificultad:
 1. **Más fuentes**: las ocho actuales cubren correo, código, redes, feeds y
    calendario. LinkedIn seguirá fuera mientras no abra una API para cuentas
    personales.
-2. **Más herramientas**: escenas por voz, y pedir una canción concreta
-   (hoy se maneja lo que ya está sonando, no se busca).
+2. **Más herramientas**: escenas por voz, y leer las etiquetas de la
+   biblioteca en vez de fiarse del nombre del fichero.
 3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
 4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.
 5. **Acceso desde el móvil**: exponer el servidor en la red local (`server.host: 0.0.0.0`) — hazlo solo en redes de confianza, no hay autenticación.

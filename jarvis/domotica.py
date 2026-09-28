@@ -81,6 +81,9 @@ class HomeAssistant:
         self.dominios = tuple(dominios) if dominios else DOMINIOS_SEGUROS
         self._cache: list[dict] = []
         self._cache_en = 0.0
+        # Los servicios de una instalación no cambian salvo que se instale
+        # algo, así que se piden una vez y se guardan.
+        self._servicios: set | None = None
 
     @property
     def disponible(self) -> bool:
@@ -125,6 +128,29 @@ class HomeAssistant:
         if respuesta.status_code >= 400:
             raise SinConexion(f"respondió {respuesta.status_code}")
         return respuesta.json()
+
+    def servicios(self) -> set:
+        """Qué servicios existen en esta instalación, como «dominio.servicio».
+
+        Sirve para saber si hay Music Assistant sin preguntárselo a nadie: si
+        `music_assistant.play_media` está, es que está.
+        """
+        if self._servicios is not None:
+            return self._servicios
+        try:
+            with self._cliente() as client:
+                respuesta = client.get(f"{self.url}/api/services")
+        except Exception as exc:  # noqa: BLE001
+            raise SinConexion(f"no contesta ({exc})") from exc
+        if respuesta.status_code >= 400:
+            raise SinConexion(f"respondió {respuesta.status_code}")
+
+        self._servicios = {
+            f"{bloque.get('domain', '')}.{nombre}"
+            for bloque in respuesta.json()
+            for nombre in (bloque.get("services") or {})
+        }
+        return self._servicios
 
     # -- escritura ---------------------------------------------------------
     def llama(self, dominio: str, servicio: str, entity_id: str,

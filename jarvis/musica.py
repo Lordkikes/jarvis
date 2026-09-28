@@ -17,11 +17,15 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import time
 import unicodedata
+from pathlib import Path
 
 log = logging.getLogger("jarvis.musica")
 
 TIEMPO_LIMITE = 5.0
+# Cuánto vale la lista de ficheros de la biblioteca antes de releerla.
+CACHE_SEGUNDOS = 300
 
 # Lo que se puede pedir, y cómo se dice en cada sitio. None = no aplica.
 ACCIONES = {
@@ -98,6 +102,12 @@ class Local:
             "artista": artista,
             "volumen": _a_porcentaje(volumen),
         }
+
+    def abre(self, uri: str, reproductor: str = "") -> bool:
+        """Le dice al reproductor que ponga eso: un fichero o una URL."""
+        destino = ["-p", reproductor] if reproductor else []
+        ok, _ = self._ejecuta(*destino, "open", uri)
+        return ok
 
     def ejecuta(self, accion: str, reproductor: str = "",
                 volumen: int | None = None) -> bool:
@@ -190,3 +200,93 @@ def busca(candidatos: list[dict], texto: str) -> list[dict]:
     exactos = [c for c in candidatos if normaliza(c.get("nombre", "")) == objetivo]
     return exactos or [c for c in candidatos
                        if objetivo in normaliza(c.get("nombre", ""))]
+
+
+# -- pedir una canción concreta ---------------------------------------------
+# Hay tres maneras de conseguir que suene algo que no estaba sonando, y
+# ninguna sirve para todo el mundo, así que se prueban por orden:
+#
+#   1. **Favoritos**: un nombre y una URL en config.yaml. Es lo que resuelve
+#      «pon Radio 3», que no es una búsqueda sino una emisora concreta.
+#   2. **Music Assistant**: si está instalado en Home Assistant, su servicio
+#      `play_media` acepta texto libre y busca en todo lo que tengas dado de
+#      alta —Spotify, la biblioteca local, lo que sea—. Es la única vía que
+#      de verdad «busca», así que cuando está, manda.
+#   3. **Una carpeta de música**: para quien no tenga Music Assistant. Se
+#      recorre, se busca por nombre de fichero y se abre en el reproductor
+#      del equipo.
+
+EXTENSIONES = (".mp3", ".flac", ".m4a", ".ogg", ".opus", ".wav", ".aac",
+               ".wma", ".aiff", ".alac")
+MAX_FICHEROS = 50_000
+SERVICIO_MASS = "music_assistant.play_media"
+TIPOS_MASS = ("artist", "album", "playlist", "track", "radio", "podcast",
+              "audiobook", "folder")
+
+
+class Biblioteca:
+    """Una carpeta de música, recorrida y buscada por nombre de fichero.
+
+    No se leen las etiquetas ID3: haría falta otra dependencia y, en la
+    práctica, quien tiene una carpeta de música la tiene ordenada por
+    artista y disco, así que la ruta ya dice lo que hay que saber.
+    """
+
+    def __init__(self, carpeta: str = "", cache_segundos: int = CACHE_SEGUNDOS):
+        self.carpeta = Path(carpeta).expanduser() if carpeta else None
+        self.cache_segundos = cache_segundos
+        self._ficheros: list[Path] = []
+        self._leida_en = 0.0
+
+    @property
+    def disponible(self) -> bool:
+        return bool(self.carpeta and self.carpeta.is_dir())
+
+    def ficheros(self, refrescar: bool = False) -> list[Path]:
+        if not self.disponible:
+            return []
+        if not refrescar and self._ficheros and \
+                time.time() - self._leida_en < self.cache_segundos:
+            return self._ficheros
+
+        encontrados: list[Path] = []
+        for ruta in self.carpeta.rglob("*"):
+            if ruta.suffix.lower() in EXTENSIONES and ruta.is_file():
+                encontrados.append(ruta)
+                if len(encontrados) >= MAX_FICHEROS:
+                    log.warning("la biblioteca tiene más de %d ficheros; "
+                                "se busca solo entre los primeros", MAX_FICHEROS)
+                    break
+        self._ficheros = encontrados
+        self._leida_en = time.time()
+        return self._ficheros
+
+    def busca(self, texto: str, limite: int = 5) -> list[Path]:
+        """Los ficheros que contienen todas las palabras de lo que se ha pedido.
+
+        Gana la ruta más corta: «Queen» debe dar la canción de Queen antes que
+        la versión en directo del disco recopilatorio de tres discos.
+        """
+        palabras = [p for p in normaliza(texto).split() if p]
+        if not palabras:
+            return []
+        encaje = []
+        for ruta in self.ficheros():
+            relativa = normaliza(str(ruta.relative_to(self.carpeta)))
+            if all(palabra in relativa for palabra in palabras):
+                encaje.append(ruta)
+        return sorted(encaje, key=lambda r: (len(str(r)), str(r)))[:limite]
+
+
+def busca_favorito(favoritos: dict, texto: str) -> tuple[str, str] | None:
+    """(nombre, URL) del favorito que encaje, o None. Exacto antes que parcial."""
+    objetivo = normaliza(texto)
+    if not (objetivo and favoritos):
+        return None
+    for nombre, url in favoritos.items():
+        if normaliza(nombre) == objetivo:
+            return nombre, url
+    for nombre, url in favoritos.items():
+        if objetivo in normaliza(nombre):
+            return nombre, url
+    return None

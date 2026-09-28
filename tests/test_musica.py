@@ -66,6 +66,9 @@ elif orden == "volume":
             suyo["volume"] = float(nivel)
     else:
         print(suyo["volume"])
+elif orden == "open":
+    suyo["opened"] = args[1] if len(args) > 1 else ""
+    suyo["status"] = "Playing"
 elif orden in ("play", "pause", "play-pause", "stop", "next", "previous"):
     suyo["status"] = {"play": "Playing", "pause": "Paused", "stop": "Stopped",
                       "next": "Playing", "previous": "Playing"}.get(
@@ -166,6 +169,12 @@ class TestLocal(CasoConPlayerctl):
         self.assertEqual(self.lee()["estados"]["vlc"]["status"], "Playing")
         self.assertEqual(self.lee()["estados"]["spotify"]["status"], "Playing")
         self.assertIn(["-p", "vlc", "play"], self.llamadas())
+
+    def test_abrir_un_fichero_o_una_url(self):
+        self.assertTrue(Local().abre("https://ejemplo/radio.mp3"))
+        self.assertEqual(self.lee()["estados"]["spotify"]["opened"],
+                         "https://ejemplo/radio.mp3")
+        self.assertIn(["open", "https://ejemplo/radio.mp3"], self.llamadas())
 
     def test_una_orden_que_no_entiende_devuelve_falso(self):
         self.assertFalse(Local().ejecuta("achicharrar"))
