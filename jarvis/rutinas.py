@@ -27,6 +27,9 @@ from pathlib import Path
 from .alarmas import parse_hora, siguiente_ocurrencia
 from .listas import normaliza
 
+# Lo que puede disparar una rutina además de una hora: cosas que pasan.
+SUCESOS = ("alarma", "salir", "llegar")
+
 MAX_RUTINAS = 10
 MAX_PASOS = 12
 # Media hora tarde una rutina de mañana ya no es una rutina de mañana.
@@ -43,6 +46,7 @@ PASOS = {
     "novedades": "cuántos correos y publicaciones hay desde ayer",
     "repasar_casa": "qué se ha quedado abierto o sin cerrar",
     "decir": "una frase tuya, tal cual",
+    "al_movil": "manda al móvil lo dicho hasta aquí",
     "escena": "pone una escena",
     "encender": "enciende un dispositivo",
     "apagar": "apaga un dispositivo",
@@ -121,13 +125,13 @@ class Rutinas:
             return exactas
         return [r for r in rutinas if objetivo in normaliza(r.get("nombre", ""))]
 
-    def por_alarma(self) -> list[dict]:
-        """Las que esperan a que pares el despertador, no a una hora."""
-        return [r for r in self.lista() if r.get("disparador") == "alarma"]
+    def por_disparador(self, cual: str) -> list[dict]:
+        """Las que esperan a algo que pasa, no a una hora: la alarma, la puerta."""
+        return [r for r in self.lista() if r.get("disparador") == cual]
 
     # -- modificación ------------------------------------------------------
     def pon(self, nombre: str, pasos: list[dict], hora=None, dias=(),
-            por_alarma: bool = False, ahora: datetime | None = None) -> dict:
+            disparador: str = "", ahora: datetime | None = None) -> dict:
         nombre = (nombre or "").strip()
         if not nombre:
             return {"ok": False, "motivo": "hace falta un nombre"}
@@ -144,11 +148,13 @@ class Rutinas:
             "id": uuid.uuid4().hex[:8],
             "nombre": nombre,
             "pasos": pasos[:MAX_PASOS],
-            "disparador": "alarma" if por_alarma else ("hora" if hora else "mano"),
+            "disparador": (disparador if disparador in SUCESOS
+                           else ("hora" if hora else "mano")),
             "hora": hora.strftime("%H:%M") if hora else "",
             "dias": list(dias),
             "proxima": (siguiente_ocurrencia(hora, dias, ahora).isoformat(
-                timespec="seconds") if hora and not por_alarma else ""),
+                timespec="seconds")
+                        if hora and disparador not in SUCESOS else ""),
         }
         datos.append(nueva)
         self._escribe(datos)

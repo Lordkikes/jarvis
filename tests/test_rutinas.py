@@ -94,12 +94,12 @@ class CasoConFichero(unittest.TestCase):
         self.tmp.cleanup()
 
     def pon(self, nombre="buenos días", pasos=("saludo",), hora="07:30",
-            dias=LABORABLES, por_alarma=False, ahora=LUNES) -> dict:
+            dias=LABORABLES, disparador="", ahora=LUNES) -> dict:
         from jarvis.alarmas import parse_hora
         pasos, _ = parse_pasos(list(pasos))
         resultado = self.rutinas.pon(nombre, pasos,
                                      parse_hora(hora) if hora else None,
-                                     dias, por_alarma, ahora)
+                                     dias, disparador, ahora)
         self.assertTrue(resultado.get("ok"), resultado)
         return resultado["rutina"]
 
@@ -119,10 +119,21 @@ class TestAlmacen(CasoConFichero):
         self.assertEqual(rutina["disparador"], "mano")
         self.assertEqual(rutina["proxima"], "")
 
-    def test_por_alarma(self):
-        rutina = self.pon(hora=None, por_alarma=True)
-        self.assertEqual(rutina["disparador"], "alarma")
-        self.assertEqual(len(self.rutinas.por_alarma()), 1)
+    def test_por_un_suceso_y_no_por_una_hora(self):
+        for suceso in ("alarma", "salir", "llegar"):
+            with self.subTest(suceso=suceso):
+                rutina = self.pon(nombre=suceso, hora=None, disparador=suceso)
+                self.assertEqual(rutina["disparador"], suceso)
+                self.assertEqual(rutina["proxima"], "", "no espera a una hora")
+                self.assertEqual(
+                    [r["nombre"] for r in self.rutinas.por_disparador(suceso)],
+                    [suceso])
+
+    def test_un_suceso_gana_a_la_hora(self):
+        """«cuando llegue» es cuando llegues, no a las siete."""
+        rutina = self.pon(hora="07:00", disparador="llegar")
+        self.assertEqual(rutina["disparador"], "llegar")
+        self.assertEqual(rutina["proxima"], "")
 
     def test_el_mismo_nombre_la_sustituye(self):
         """«cambia mi rutina de mañana» no deja dos con el mismo nombre."""
@@ -193,7 +204,7 @@ class TestVencidas(CasoConFichero):
         self.assertEqual(len(self.rutinas.vencidas(poco)), 1)
 
     def test_la_de_la_alarma_no_vence_por_hora(self):
-        self.pon(hora=None, por_alarma=True)
+        self.pon(hora=None, disparador="alarma")
         self.assertEqual(self.rutinas.vencidas(LUNES + timedelta(days=7)), [])
 
     def test_la_de_mano_tampoco(self):
@@ -246,7 +257,7 @@ class TestHerramientas(CasoConCaja):
         self.assertIn("a las 07:30, de lunes a viernes", salida)
 
     async def test_crear_por_alarma(self):
-        salida = await self.crea(pasos="saludo", al_parar_la_alarma=True)
+        salida = await self.crea(pasos="saludo", cuando="alarma")
         self.assertIn("cuando pares el despertador", salida)
 
     async def test_lo_que_no_entiende_lo_dice(self):
@@ -484,7 +495,7 @@ class TestLosQueActuan(CasoConCaja):
 class TestConLaAlarma(CasoConCaja):
     async def test_parar_el_despertador_la_dispara(self):
         await self.crea(pasos="decir: el café está hecho",
-                        al_parar_la_alarma=True)
+                        cuando="alarma")
         await self.caja.run("poner_alarma", {"hora": "07:00", "dias": "diario"})
         self.suena()
 
@@ -500,7 +511,7 @@ class TestConLaAlarma(CasoConCaja):
     async def test_no_se_dispara_al_posponer(self):
         """Posponer es seguir durmiendo: el parte de la mañana puede esperar."""
         await self.crea(pasos="decir: el café está hecho",
-                        al_parar_la_alarma=True)
+                        cuando="alarma")
         await self.caja.run("poner_alarma", {"hora": "07:00", "dias": "diario"})
         self.suena()
         salida = await self.caja.run("parar_alarma", {"posponer": True})
