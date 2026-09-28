@@ -520,6 +520,37 @@ Dos detalles más:
   correo o la agenda, igual que `abrir`: un correo podría estar diciendo
   «enciende el horno». Preguntar por el estado no, que eso no actúa.
 
+### Música
+
+Dos caminos, y Jarvis elige solo:
+
+- **Los altavoces de casa**, por Home Assistant: Sonos, Chromecast, el
+  televisor, un receptor. Si ya tienes la domótica configurada, esto funciona
+  sin tocar nada más.
+- **El reproductor del propio equipo**, vía `playerctl`: Spotify, VLC, mpv,
+  Rhythmbox o la pestaña del navegador. Es **opcional**; si no está instalado,
+  Jarvis solo maneja los altavoces y te lo dice. `sudo apt install playerctl`
+  y ya.
+
+```
+«pausa»                        → a lo que esté sonando
+«siguiente»                    → salta de canción
+«pon el volumen al 30»         → porcentaje, aquí y en Home Assistant
+«¿qué suena?»                  → título, artista, dónde y a qué volumen
+«pausa el spotify»             → a ese, aunque suene otra cosa en el salón
+```
+
+**Lo que no es evidente es a quién le hablas cuando no lo dices.** Si hay un
+Sonos sonando en el salón y el Spotify del escritorio en pausa, «pausa» tiene
+que parar el Sonos, no el escritorio. Así que manda lo que está sonando;
+después, lo que esté en pausa —seguir escuchando ahí es lo más probable—, y
+solo si no hay ni eso, el primero que haya. Si dices el nombre, manda lo que
+digas; y si dos encajan, pregunta.
+
+> `playerctl` se llama como binario y no hablando D-Bus directamente para no
+> arrastrar otra dependencia de Python: así es opcional de verdad, no un
+> requisito disfrazado.
+
 ### Listas de la compra
 
 Añadir, tachar y vaciar, hablando. Es todo local —un JSON al lado de las
@@ -576,6 +607,7 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 - Guardar y leer notas.
 - Llevarte listas de la compra: añadir, tachar y vaciar, hablando.
 - Encender, apagar y consultar lo que tengas en Home Assistant.
+- Manejar la música: pausar, saltar de canción y subir el volumen.
 - Recordar datos tuyos entre sesiones (`data/memory.json`).
 - Informar del estado del equipo (CPU, memoria, disco).
 - Abrir webs y aplicaciones.
@@ -621,6 +653,7 @@ jarvis/
 │   │   └── rrule.py        # ★ expansión de repeticiones
 │   ├── listas.py           # listas de la compra, en un JSON local
 │   ├── domotica.py         # ★ cliente de Home Assistant
+│   ├── musica.py           # altavoces de casa y reproductor del equipo
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
 │   │   ├── claude.py       # ★ streaming + bucle de herramientas
@@ -830,7 +863,8 @@ Ideas para seguir construyendo, más o menos por dificultad:
 1. **Más fuentes**: las ocho actuales cubren correo, código, redes, feeds y
    calendario. LinkedIn seguirá fuera mientras no abra una API para cuentas
    personales.
-2. **Más herramientas**: control de música más fino, y escenas por voz.
+2. **Más herramientas**: escenas por voz, y pedir una canción concreta
+   (hoy se maneja lo que ya está sonando, no se busca).
 3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
 4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.
 5. **Acceso desde el móvil**: exponer el servidor en la red local (`server.host: 0.0.0.0`) — hazlo solo en redes de confianza, no hay autenticación.

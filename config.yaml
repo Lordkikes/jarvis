@@ -154,6 +154,11 @@ tools:
   memory_file: data/memory.json
   lists_file: data/lists.json
 
+  # Para la música del propio equipo (Spotify, VLC, el navegador…) hace falta
+  # `playerctl`, que está en los repositorios de cualquier distribución. Si no
+  # está instalado, Jarvis solo maneja los altavoces de Home Assistant.
+  playerctl: playerctl
+
   home_assistant:
     url: ""              # http://homeassistant.local:8123
     verify_ssl: true

@@ -23,6 +23,10 @@ from ..domotica import (
     en_palabras, nombre_de, servicio_para,
 )
 from ..listas import POR_DEFECTO, Listas, normaliza
+from ..musica import (
+    ACCIONES, Local, desde_home_assistant, elige, en_palabras as suena_en_palabras,
+    busca as busca_reproductor,
+)
 from ..sources import ical
 from ..http import AsyncClient
 
@@ -399,6 +403,36 @@ class Toolbox:
             },
         },
         {
+            "name": "controlar_musica",
+            "description": (
+                "Maneja lo que está sonando: pausar, seguir, saltar de "
+                "canción o cambiar el volumen. Sin `donde`, va a lo que esté "
+                "sonando; si no suena nada, a lo que esté en pausa."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "accion": {"type": "string",
+                               "enum": ["reproducir", "pausa", "alternar",
+                                        "siguiente", "anterior", "parar",
+                                        "subir", "bajar", "volumen"]},
+                    "donde": {"type": "string",
+                              "description": "Opcional: el altavoz o el "
+                                             "reproductor, por su nombre"},
+                    "volumen": {"type": "integer", "minimum": 0, "maximum": 100,
+                                "description": "Porcentaje, con accion=volumen"},
+                },
+                "required": ["accion"],
+            },
+        },
+        {
+            "name": "que_suena",
+            "description": "Qué se está reproduciendo y dónde.",
+            "input_schema": {
+                "type": "object",
+                "properties": {"donde": {"type": "string"}},
+            },
+        },
+        {
             "name": "estado_del_sistema",
             "description": "CPU, memoria y disco del equipo donde corre Jarvis.",
             "input_schema": {"type": "object", "properties": {}},
@@ -440,6 +474,7 @@ class Toolbox:
             # en la lista de dispositivos si no se la nombra a propósito.
             dominios=cfg.get("tools.home_assistant.dominios") or None,
         )
+        self.local = Local(cfg.get("tools.playerctl", "playerctl"))
         self._timers: set[asyncio.Task] = set()
 
     # -- contenido externo -------------------------------------------------
@@ -464,6 +499,8 @@ class Toolbox:
         hidden = set()
         if not self.casa.disponible:
             hidden |= {"controlar_dispositivo", "estado_de_la_casa"}
+        if not (self.casa.disponible or self.local.disponible):
+            hidden |= {"controlar_musica", "que_suena"}
         if not getattr(self.calendar, "allow_write", False):
             hidden |= {"crear_cita", "mover_cita", "cancelar_cita"}
         if not self.allow_system:
@@ -667,6 +704,84 @@ class Toolbox:
             return "Está todo apagado y cerrado."
         return (f"{len(encendidas)} cosas encendidas o abiertas: "
                 + ", ".join(nombre_de(e) for e in encendidas[:12]) + ".")
+
+    # -- música ------------------------------------------------------------
+    def _reproductores(self) -> list[dict]:
+        """Los altavoces de casa y el reproductor del equipo, en una lista."""
+        candidatos = []
+        if self.casa.disponible:
+            try:
+                candidatos += [desde_home_assistant(e) for e in
+                               self.casa.estados(refrescar=True)
+                               if dominio_de(e.get("entity_id", "")) == "media_player"
+                               and (e.get("state") or "").lower() != "off"]
+            except SinConexion as exc:
+                log.debug("Home Assistant no contesta para la música (%s)", exc)
+        if self.local.disponible and (suyo := self.local.estado()):
+            candidatos.append(suyo)
+        return candidatos
+
+    def _reproductor(self, donde: str):
+        """El reproductor del que se habla, o un texto explicando por qué no."""
+        candidatos = self._reproductores()
+        if not candidatos:
+            if not (self.casa.disponible or self.local.disponible):
+                return ("No tengo ni Home Assistant ni playerctl: no puedo "
+                        "controlar la música.")
+            return "No encuentro ningún reproductor encendido."
+
+        if donde:
+            encontrados = busca_reproductor(candidatos, donde)
+            if not encontrados:
+                return f"No encuentro ningún reproductor que se llame «{donde}»."
+            if len(encontrados) > 1:
+                cuales = ", ".join(c["nombre"] for c in encontrados[:6])
+                return f"Hay varios, pregúntale cuál: {cuales}."
+            return encontrados[0]
+        return elige(candidatos)
+
+    def _tool_controlar_musica(self, args: dict) -> str:
+        accion = normaliza(args.get("accion") or "")
+        if accion not in ACCIONES:
+            return f"No sé qué es «{args.get('accion')}»."
+        if self.external_content_seen:
+            # Manejar el equipo es actuar, igual que `abrir`.
+            return ("No toco la música: en este turno he leído contenido de "
+                    "fuera. Pídemelo otra vez en una frase aparte.")
+
+        reproductor = self._reproductor((args.get("donde") or "").strip())
+        if isinstance(reproductor, str):
+            return reproductor
+
+        volumen = args.get("volumen")
+        if accion == "volumen" and volumen is None:
+            return "¿A qué volumen?"
+        if volumen is not None:
+            volumen = max(0, min(100, int(volumen)))
+
+        if reproductor["fuente"] == "local":
+            hecho = self.local.ejecuta(accion, reproductor.get("nombre", ""), volumen)
+            if not hecho:
+                return f"El reproductor no ha aceptado «{accion}»."
+        else:
+            servicio = ACCIONES[accion][0]
+            datos = {"volume_level": volumen / 100} if accion == "volumen" else {}
+            try:
+                self.casa.llama("media_player", servicio,
+                                reproductor["entity_id"], **datos)
+            except SinConexion as exc:
+                return f"No he podido: {exc}."
+
+        self.bus.emit("musica", donde=reproductor["nombre"], accion=accion)
+        if accion == "volumen":
+            return f"{reproductor['nombre']} al {volumen} por ciento."
+        return f"Hecho en {reproductor['nombre']}."
+
+    def _tool_que_suena(self, args: dict) -> str:
+        reproductor = self._reproductor((args.get("donde") or "").strip())
+        if isinstance(reproductor, str):
+            return reproductor
+        return suena_en_palabras(reproductor)
 
     # -- listas ------------------------------------------------------------
     # Lo que hay aquí lo ha dictado la persona, así que no se valla como
