@@ -158,6 +158,18 @@ tools:
   # Para la música del propio equipo (Spotify, VLC, el navegador…) hace falta
   # `playerctl`, que está en los repositorios de cualquier distribución. Si no
   # está instalado, Jarvis solo maneja los altavoces de Home Assistant.
+  avisos:
+    # Cuando vence un temporizador, además de decirlo por el altavoz. Sirve
+    # justo para cuando no estás delante, que es cuando el altavoz no vale.
+    temporizadores: true
+    ntfy:
+      servidor: https://ntfy.sh   # o el tuyo, si lo alojas
+      topico: ""                  # elige uno difícil de adivinar: quien lo
+                                  # sepa puede leer y escribir en él
+    home_assistant:
+      servicio: ""                # notify.mobile_app_loquesea; vacío = el
+                                  # primero de la app de móvil que encuentre
+
   playerctl: playerctl
 
   musica:

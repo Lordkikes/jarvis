@@ -520,6 +520,40 @@ Dos detalles más:
   correo o la agenda, igual que `abrir`: un correo podría estar diciendo
   «enciende el horno». Preguntar por el estado no, que eso no actúa.
 
+### Avisos al móvil
+
+Dos caminos, y si tienes los dos se manda por los dos: un aviso que no llega
+no sirve de nada, y duplicarlo molesta menos que perderlo.
+
+- **Home Assistant**, si usas su aplicación de móvil: **no hay nada que
+  montar**. La app ya está registrada como un servicio `notify`, y Jarvis la
+  descubre solo. Si tienes varias, se coge la primera por orden alfabético, o
+  nombras la que quieras.
+- **ntfy**, si no tienes Home Assistant o lo prefieres aparte: eliges un tema,
+  lo sigues desde su app y ya. Sin cuenta, y con servidor propio si quieres.
+
+```yaml
+tools:
+  avisos:
+    temporizadores: true        # avisar también cuando vence uno
+    ntfy:
+      servidor: https://ntfy.sh
+      topico: jarvis-de-yelko-4f2a
+```
+
+> **El tema de ntfy es la contraseña.** Quien lo sepa puede leer tus avisos y
+> escribirte otros, así que elige uno difícil de adivinar. Si lo proteges con
+> un token, va en `JARVIS_NTFY_TOKEN`.
+
+Lo que hace esto más que un juguete es el **temporizador**: si pones uno para
+el arroz y te vas a la compra, el altavoz de casa no te sirve de nada. Ahora
+además te suena el bolsillo. Se apaga con `temporizadores: false`.
+
+> Nota de implementación: ntfy en modo JSON publica contra la **raíz** del
+> servidor, no contra la URL del tema —el tema va dentro del cuerpo—. Mandarlo
+> a `/mi-tema` hace que el mensaje que llegue sea el propio JSON en crudo. Lo
+> avisan en su documentación porque todo el mundo se lo come una vez.
+
 ### Escenas
 
 ```
@@ -683,7 +717,7 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 
 - Decir la fecha y la hora.
 - Consultar el tiempo de cualquier ciudad (Open-Meteo, sin clave).
-- Poner temporizadores y avisarte en voz alta cuando vencen.
+- Poner temporizadores y avisarte cuando vencen, en voz alta y en el móvil.
 - Guardar y leer notas.
 - Llevarte listas de la compra: añadir, tachar y vaciar, hablando.
 - Encender, apagar y consultar lo que tengas en Home Assistant.
@@ -693,6 +727,7 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 - Recordar datos tuyos entre sesiones (`data/memory.json`).
 - Informar del estado del equipo (CPU, memoria, disco).
 - Abrir webs y aplicaciones.
+- Mandarte un aviso al móvil de lo que le digas.
 - Buscar en internet (búsqueda web del lado del servidor de Anthropic).
 - Buscar en sus ocho fuentes indexadas y resumir lo que encuentre: correos
   recientes, sesiones de Claude Code, publicaciones de Bluesky, Mastodon,
@@ -736,6 +771,7 @@ jarvis/
 │   ├── listas.py           # listas de la compra, en un JSON local
 │   ├── domotica.py         # ★ cliente de Home Assistant
 │   ├── escenas.py          # escenas propias, con su instantánea
+│   ├── avisos.py           # notificaciones al móvil (ntfy / Home Assistant)
 │   ├── musica.py           # altavoces de casa y reproductor del equipo
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
