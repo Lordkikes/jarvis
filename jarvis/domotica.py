@@ -153,14 +153,22 @@ class HomeAssistant:
         return self._servicios
 
     # -- escritura ---------------------------------------------------------
-    def llama(self, dominio: str, servicio: str, entity_id: str,
+    def llama(self, dominio: str, servicio: str, entity_id: str = "",
               **datos) -> list:
-        """Llama a un servicio. Devuelve las entidades que cambiaron."""
+        """Llama a un servicio. Devuelve las entidades que cambiaron.
+
+        Sin `entity_id` no se manda el campo: hay servicios que no apuntan a
+        ninguna entidad —`scene.apply` recibe los estados directamente— y
+        mandarles uno vacío los hace fallar.
+        """
+        cuerpo = {**datos}
+        if entity_id:
+            cuerpo["entity_id"] = entity_id
         try:
             with self._cliente() as client:
                 respuesta = client.post(
                     f"{self.url}/api/services/{dominio}/{servicio}",
-                    json={"entity_id": entity_id, **datos})
+                    json=cuerpo)
         except Exception as exc:  # noqa: BLE001
             raise SinConexion(f"no contesta ({exc})") from exc
         if respuesta.status_code >= 400:

@@ -22,6 +22,7 @@ from ..domotica import (
     DOMINIOS_DELICADOS, HomeAssistant, SinConexion, dominio_de,
     en_palabras, nombre_de, servicio_para,
 )
+from ..escenas import DOMINIOS as DOMINIOS_ESCENA, Escenas, instantanea
 from ..listas import POR_DEFECTO, Listas, normaliza
 from ..musica import (
     ACCIONES, SERVICIO_MASS, TIPOS_MASS, Biblioteca, Local,
@@ -456,6 +457,49 @@ class Toolbox:
             },
         },
         {
+            "name": "activar_escena",
+            "description": (
+                "Pone una escena: «modo cine», «buenas noches», lo que tenga "
+                "configurado. Vale tanto para las escenas y los guiones de "
+                "Home Assistant como para las que hayas guardado tú. Sin "
+                "`cual`, dice cuáles hay."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "cual": {"type": "string",
+                             "description": "El nombre de la escena"},
+                },
+            },
+        },
+        {
+            "name": "guardar_escena",
+            "description": (
+                "Guarda cómo está la casa ahora mismo con un nombre, para "
+                "poder volver a esto después. Si ya existe una escena con ese "
+                "nombre hace falta confirmación, porque se pisa."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "nombre": {"type": "string"},
+                    "confirmar": {"type": "boolean", "default": False},
+                },
+                "required": ["nombre"],
+            },
+        },
+        {
+            "name": "olvidar_escena",
+            "description": "Borra una escena de las que has guardado tú. Las "
+                           "de Home Assistant no se tocan.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "nombre": {"type": "string"},
+                    "confirmar": {"type": "boolean", "default": False},
+                },
+                "required": ["nombre"],
+            },
+        },
+        {
             "name": "estado_del_sistema",
             "description": "CPU, memoria y disco del equipo donde corre Jarvis.",
             "input_schema": {"type": "object", "properties": {}},
@@ -499,6 +543,8 @@ class Toolbox:
         )
         self.local = Local(cfg.get("tools.playerctl", "playerctl"))
         self.biblioteca = Biblioteca(cfg.get("tools.musica.biblioteca", ""))
+        self.escenas = Escenas(data_path(cfg.get("tools.scenes_file",
+                                                 "data/scenes.json")))
         # Emisoras y listas con nombre propio: lo que resuelve «pon Radio 3».
         self.favoritos = dict(cfg.get("tools.musica.favoritos", {}) or {})
         self._timers: set[asyncio.Task] = set()
@@ -524,7 +570,8 @@ class Toolbox:
     def definitions(self) -> list[dict]:
         hidden = set()
         if not self.casa.disponible:
-            hidden |= {"controlar_dispositivo", "estado_de_la_casa"}
+            hidden |= {"controlar_dispositivo", "estado_de_la_casa",
+                       "activar_escena", "guardar_escena", "olvidar_escena"}
         if not (self.casa.disponible or self.local.disponible):
             hidden |= {"controlar_musica", "que_suena", "poner_musica"}
         if not getattr(self.calendar, "allow_write", False):
@@ -730,6 +777,136 @@ class Toolbox:
             return "Está todo apagado y cerrado."
         return (f"{len(encendidas)} cosas encendidas o abiertas: "
                 + ", ".join(nombre_de(e) for e in encendidas[:12]) + ".")
+
+    # -- escenas -----------------------------------------------------------
+    def _escenas_de_casa(self) -> list[dict]:
+        """Las escenas y los guiones que ya existen en Home Assistant."""
+        try:
+            return [e for e in self.casa.estados()
+                    if dominio_de(e.get("entity_id", "")) in ("scene", "script")]
+        except SinConexion:
+            return []
+
+    def _tool_activar_escena(self, args: dict) -> str:
+        if not self.casa.disponible:
+            return ("No tengo Home Assistant configurado, así que no hay "
+                    "escenas que poner.")
+
+        cual = (args.get("cual") or "").strip()
+        if not cual:
+            return self._lista_de_escenas()
+        if self.external_content_seen:
+            return ("No toco nada de casa: en este turno he leído contenido "
+                    "de fuera. Pídemelo otra vez en una frase aparte.")
+
+        # Las guardadas mandan: si te has molestado en guardar «modo cine»,
+        # es esa la que quieres, no una que se llame parecido en el servidor.
+        if guardadas := self.escenas.busca(cual):
+            if len(guardadas) > 1:
+                cuales = ", ".join(g["nombre"] for g in guardadas[:6])
+                return f"Tienes varias que encajan, pregúntale cuál: {cuales}."
+            return self._aplica_guardada(guardadas[0])
+
+        suyas = [e for e in self._escenas_de_casa()
+                 if normaliza(cual) in normaliza(nombre_de(e))]
+        exactas = [e for e in suyas if normaliza(nombre_de(e)) == normaliza(cual)]
+        suyas = exactas or suyas
+        if not suyas:
+            return f"No encuentro ninguna escena que se llame «{cual}»."
+        if len(suyas) > 1:
+            cuales = ", ".join(nombre_de(e) for e in suyas[:6])
+            return f"Hay varias, pregúntale cuál: {cuales}."
+
+        entidad = suyas[0]
+        try:
+            self.casa.llama(dominio_de(entidad["entity_id"]), "turn_on",
+                            entidad["entity_id"])
+        except SinConexion as exc:
+            return f"No he podido: {exc}."
+        self.bus.emit("escena", nombre=nombre_de(entidad))
+        return f"Hecho: {nombre_de(entidad)}."
+
+    def _aplica_guardada(self, escena: dict) -> str:
+        """`scene.apply` recibe los estados directamente, sin escena previa.
+
+        Por eso las guardadas sobreviven a un reinicio de Home Assistant:
+        la instantánea la tenemos nosotros, no el servidor.
+        """
+        entidades = escena.get("entidades") or {}
+        if not entidades:
+            return f"«{escena.get('nombre', '')}» está vacía."
+        try:
+            self.casa.llama("scene", "apply", "", entities=entidades)
+        except SinConexion as exc:
+            return f"No he podido: {exc}."
+        self.bus.emit("escena", nombre=escena.get("nombre", ""))
+        return f"Hecho: {escena.get('nombre', '')}."
+
+    def _lista_de_escenas(self) -> str:
+        guardadas = self.escenas.nombres()
+        suyas = [nombre_de(e) for e in self._escenas_de_casa()]
+        if not (guardadas or suyas):
+            return ("No hay escenas. Puedes decirme «guarda esto como modo "
+                    "cine» cuando tengas la luz como te gusta.")
+        partes = []
+        if guardadas:
+            partes.append(f"tuyas: {', '.join(guardadas[:10])}")
+        if suyas:
+            partes.append(f"de Home Assistant: {', '.join(suyas[:10])}")
+        return f"Escenas — {'; '.join(partes)}."
+
+    def _tool_guardar_escena(self, args: dict) -> str:
+        if not self.casa.disponible:
+            return "No tengo Home Assistant configurado."
+        nombre = (args.get("nombre") or "").strip()
+        if not nombre:
+            return "¿Cómo la llamo?"
+
+        try:
+            entidades = [e for e in self.casa.estados(refrescar=True)
+                         if dominio_de(e.get("entity_id", "")) in DOMINIOS_ESCENA]
+        except SinConexion as exc:
+            return f"No consigo hablar con Home Assistant: {exc}."
+        foto = instantanea(entidades)
+        if not foto:
+            return "No veo nada que guardar en una escena."
+
+        # Crear es inocuo; pisar una que ya existe, no: se pierde la anterior.
+        if self.escenas.existe(nombre):
+            propuesta = {"accion": "escena", "nombre": normaliza(nombre)}
+            lectura = (f"pisar la escena «{nombre}» con la luz que hay ahora "
+                       f"({len(foto)} aparatos)")
+            if (pendiente := self._confirmacion(
+                    propuesta, bool(args.get("confirmar")), lectura,
+                    "guardar")) is not None:
+                return pendiente
+
+        resultado = self.escenas.guarda(nombre, foto)
+        if not resultado.get("ok"):
+            return f"No he podido guardarla: {resultado.get('motivo', '?')}"
+        self.bus.emit("escena", nombre=nombre, guardada=len(foto))
+        return f"Guardada «{nombre}» con {len(foto)} aparatos."
+
+    def _tool_olvidar_escena(self, args: dict) -> str:
+        nombre = (args.get("nombre") or "").strip()
+        if not nombre:
+            return "¿Cuál olvido?"
+        if not (encontradas := self.escenas.busca(nombre)):
+            return (f"No tengo ninguna escena guardada que se llame "
+                    f"«{nombre}». Las de Home Assistant no las toco.")
+        if len(encontradas) > 1:
+            cuales = ", ".join(e["nombre"] for e in encontradas[:6])
+            return f"Tienes varias que encajan, pregúntale cuál: {cuales}."
+
+        escena = encontradas[0]
+        propuesta = {"accion": "olvidar_escena", "nombre": escena["nombre"]}
+        lectura = f"borrar la escena «{escena['nombre']}»"
+        if (pendiente := self._confirmacion(propuesta, bool(args.get("confirmar")),
+                                            lectura, "borrar")) is not None:
+            return pendiente
+
+        self.escenas.olvida(escena["nombre"])
+        return f"Olvidada «{escena['nombre']}»."
 
     # -- música ------------------------------------------------------------
     def _reproductores(self, incluir_apagados: bool = False) -> list[dict]:
