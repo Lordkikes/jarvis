@@ -22,6 +22,7 @@ from ..domotica import (
     DOMINIOS_DELICADOS, HomeAssistant, SinConexion, dominio_de,
     en_palabras, nombre_de, servicio_para,
 )
+from ..avisos import Avisos, Ntfy
 from ..escenas import DOMINIOS as DOMINIOS_ESCENA, Escenas, instantanea
 from ..listas import POR_DEFECTO, Listas, normaliza
 from ..musica import (
@@ -500,6 +501,22 @@ class Toolbox:
             },
         },
         {
+            "name": "avisar_al_movil",
+            "description": (
+                "Manda un aviso al móvil. Para lo que tenga que llegarle "
+                "estando fuera de casa; si está delante, basta con decírselo."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "mensaje": {"type": "string"},
+                    "titulo": {"type": "string"},
+                    "urgente": {"type": "boolean", "default": False,
+                                "description": "Solo si de verdad corre prisa"},
+                },
+                "required": ["mensaje"],
+            },
+        },
+        {
             "name": "estado_del_sistema",
             "description": "CPU, memoria y disco del equipo donde corre Jarvis.",
             "input_schema": {"type": "object", "properties": {}},
@@ -542,6 +559,17 @@ class Toolbox:
             dominios=cfg.get("tools.home_assistant.dominios") or None,
         )
         self.local = Local(cfg.get("tools.playerctl", "playerctl"))
+        self.avisos = Avisos(
+            casa=self.casa,
+            servicio=cfg.get("tools.avisos.home_assistant.servicio", ""),
+            ntfy=Ntfy(servidor=cfg.get("tools.avisos.ntfy.servidor",
+                                       "https://ntfy.sh"),
+                      topico=cfg.get("tools.avisos.ntfy.topico", "")),
+        )
+        # Un temporizador que vence mientras no estás en casa no sirve de nada
+        # si solo suena por el altavoz.
+        self.avisar_temporizadores = bool(
+            cfg.get("tools.avisos.temporizadores", True))
         self.biblioteca = Biblioteca(cfg.get("tools.musica.biblioteca", ""))
         self.escenas = Escenas(data_path(cfg.get("tools.scenes_file",
                                                  "data/scenes.json")))
@@ -569,6 +597,8 @@ class Toolbox:
     # -- esquemas ----------------------------------------------------------
     def definitions(self) -> list[dict]:
         hidden = set()
+        if not self.avisos.disponible:
+            hidden.add("avisar_al_movil")
         if not self.casa.disponible:
             hidden |= {"controlar_dispositivo", "estado_de_la_casa",
                        "activar_escena", "guardar_escena", "olvidar_escena"}
@@ -651,6 +681,10 @@ class Toolbox:
             self.bus.emit("timer", message=message)
             if self.on_announce is not None:
                 await self.on_announce(message)
+            if self.avisar_temporizadores and self.avisos.disponible:
+                # Fuera de casa, el altavoz no vale: que suene el bolsillo.
+                await asyncio.to_thread(self.avisos.envia, message,
+                                        "Temporizador")
 
         task = asyncio.create_task(fire())
         self._timers.add(task)
@@ -658,6 +692,31 @@ class Toolbox:
         minutes = seconds / 60
         cuando = f"{seconds} segundos" if seconds < 90 else f"{minutes:.0f} minutos"
         return f"Temporizador de {cuando} programado para {label}."
+
+    def _tool_avisar_al_movil(self, args: dict) -> str:
+        mensaje = (args.get("mensaje") or "").strip()
+        if not mensaje:
+            return "¿Qué le aviso?"
+        if not self.avisos.disponible:
+            return ("No tengo por dónde avisar: hace falta un tema en "
+                    "tools.avisos.ntfy.topico, o la aplicación de móvil de "
+                    "Home Assistant.")
+        if self.external_content_seen:
+            # Mandar avisos es actuar, y un correo podría estar dictándolos.
+            return ("No mando avisos: en este turno he leído contenido de "
+                    "fuera. Pídemelo otra vez en una frase aparte.")
+
+        resultado = self.avisos.envia(mensaje, (args.get("titulo") or "").strip(),
+                                      bool(args.get("urgente")))
+        if not resultado["ok"]:
+            fallos = "; ".join(resultado["fallaron"]) or "no sé por qué"
+            return f"No he podido avisar: {fallos}."
+        self.bus.emit("aviso", mensaje=mensaje)
+        # Si iba por dos sitios y uno falló, conviene saberlo.
+        if resultado["fallaron"]:
+            return (f"Avisado por {', '.join(resultado['llegaron'])}, "
+                    f"pero falló {'; '.join(resultado['fallaron'])}.")
+        return f"Avisado por {', '.join(resultado['llegaron'])}."
 
     def _tool_guardar_nota(self, args: dict) -> str:
         notes = _json_store(self.notes_file)
