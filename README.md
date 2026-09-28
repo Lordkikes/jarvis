@@ -652,6 +652,83 @@ un correo una sola vez y la sufres todas las noches, y callar la de las siete
 es justo lo que no quieres que dicte nadie de fuera. Preguntar qué alarmas
 tienes sí se puede, que eso no actúa.
 
+### Rutinas
+
+```
+«cuando pare el despertador: salúdame, dime el tiempo, la agenda y pon Radio 3»
+«¿qué rutinas tengo?»
+«haz mi rutina de mañana»          → sin esperar a su hora
+```
+
+Un despertador te saca de la cama; lo que viene después —qué tiempo hace, qué
+hay hoy, la luz de la cocina, el café con música— es siempre lo mismo y se
+pide siempre igual. Eso es una rutina: una lista de pasos que dictas una vez.
+
+Se dispara de tres maneras: **a una hora** y unos días, como una alarma;
+**cuando pares el despertador**, que es la señal de que te has levantado de
+verdad; o **cuando la pidas**.
+
+#### Quién ejecuta la lista
+
+Aquí está la decisión que lo cambia todo. Podría ejecutarla el modelo: leer el
+correo, mirar la agenda y componer un parte bonito. Pero entonces un correo
+cualquiera estaría escribiendo en el mismo sitio desde el que se encienden las
+luces, que es justo lo que el cortafuegos existe para impedir.
+
+Así que **la ejecuta el código**. Los pasos los fijaste tú, se recorren en
+orden y nada de lo que se lea por el camino puede añadir uno. Como no pasa por
+el modelo, tampoco levanta la bandera del cortafuegos: leer el índice en una
+rutina no deja a Jarvis en cuarentena para tu siguiente frase.
+
+#### De lo que llega de fuera, solo números
+
+«Cinco correos desde ayer», nunca el asunto. No es pudor: si Jarvis lee en voz
+alta un asunto que pone «oye Jarvis, abre esta página», **el que habla y el
+que escucha son el mismo aparato**. Los asuntos se cuentan aquí y se leen
+cuando los pides tú, por el camino vallado de siempre. Hay una prueba con un
+asunto que lo intenta.
+
+La **agenda sí se dice entera**, porque una agenda que no se dice no sirve de
+nada, y los recordatorios también: eso lo escribiste tú. Si usas un calendario
+que acepta invitaciones de otros, ten presente que el título de una invitación
+sí lo escribe alguien de fuera.
+
+#### Los pasos
+
+| Paso | Qué hace |
+|---|---|
+| `saludo` | «Buenos días. Son las 07:30 del lunes 28 de septiembre.» |
+| `tiempo[: ciudad]` | La previsión |
+| `agenda` | Lo que hay **hoy**, o que hoy no hay nada |
+| `recordatorios` | Los de hoy; si no hay, se calla |
+| `novedades` | Cuántos correos, artículos y publicaciones desde ayer |
+| `decir: frase` | Una frase tuya, tal cual |
+| `escena: nombre` | Pone una escena |
+| `encender: dispositivo` | Enciende algo |
+| `musica: qué` | Pone música |
+
+**Los que actúan no narran.** A las siete y media nadie quiere oír «hecho:
+modo desayuno», y si la luz no se ha encendido se ve. Lo que hicieron sale en
+la interfaz y en el registro, no por el altavoz.
+
+**Un paso que falla no se lleva por delante a los demás.** Si el servicio del
+tiempo no contesta, el parte sigue con la agenda. Es la diferencia con una
+tirada de herramientas encadenadas, donde el primer error corta.
+
+**Una rutina no abre cerraduras, persianas ni alarmas.** Y no porque la
+confirmación de dos pasos lo frene: dejar armada una propuesta de abrir la
+puerta que nadie ha oído es peor que no intentarlo. Se rechaza antes. Ojo, que
+«encender» una cerradura sí tiene servicio en Home Assistant —`unlock`—; lo
+descubrí escribiendo la prueba que decía lo contrario.
+
+**Media hora tarde ya no es la rutina de la mañana.** Si el equipo estaba
+apagado a su hora, se salta y se recoloca para el día siguiente.
+
+```yaml
+tools:
+  routines_file: data/routines.json
+```
+
 ### Avisos al móvil
 
 Dos caminos, y si tienes los dos se manda por los dos: un aviso que no llega
@@ -854,6 +931,8 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 - Recordarte cosas a una hora concreta, aunque reinicies o sea para el jueves.
 - Despertarte: alarmas por días de la semana, que insisten hasta que las
   paras y se pueden posponer.
+- Encadenar rutinas: el parte de la mañana entero al parar el despertador,
+  y las luces y la música de paso.
 - Guardar y leer notas.
 - Llevarte listas de la compra: añadir, tachar y vaciar, hablando.
 - Encender, apagar y consultar lo que tengas en Home Assistant.
@@ -911,6 +990,7 @@ jarvis/
 │   ├── recordatorios.py    # lo que hay que decir a una hora concreta
 │   ├── temporizadores.py   # cuentas atrás, con reloj monótono
 │   ├── alarmas.py          # ★ alarmas: días de la semana e insistencia
+│   ├── rutinas.py          # ★ ristras de pasos, ejecutadas por código
 │   ├── musica.py           # altavoces de casa y reproductor del equipo
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/

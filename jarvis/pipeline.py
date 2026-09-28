@@ -74,6 +74,7 @@ class Jarvis:
             self._spawn(self._sync_worker(source))
         self._spawn(self._reminder_worker())
         self._spawn(self._alarm_worker())
+        self._spawn(self._routine_worker())
         try:
             self.capture = AudioCapture(
                 loop=asyncio.get_running_loop(),
@@ -295,6 +296,19 @@ class Jarvis:
             except Exception:  # noqa: BLE001 - un fallo no puede parar el bucle
                 log.exception("fallo revisando las alarmas")
             await asyncio.sleep(5)
+
+    async def _routine_worker(self) -> None:
+        """Y las rutinas que se hacen solas a una hora.
+
+        Aquí treinta segundos sobran de largo: nadie nota que el parte de la
+        mañana empiece a las siete y media y veinte segundos.
+        """
+        while True:
+            try:
+                await self.toolbox.dispara_rutinas()
+            except Exception:  # noqa: BLE001 - un fallo no puede parar el bucle
+                log.exception("fallo revisando las rutinas")
+            await asyncio.sleep(30)
 
     async def _sync_worker(self, source) -> None:
         """Sincroniza una fuente cada N minutos, sin tocar la conversación.

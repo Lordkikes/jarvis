@@ -88,6 +88,7 @@
     .on("interrupted", () => { bubble = null; })
     .on("timer", (e) => addMessage("system", "⏱ " + e.message))
     .on("alarma", (e) => addMessage("system", "⏰ " + e.message))
+    .on("rutina", (e) => addMessage("system", "▶️ " + e.message))
     .on("note", () => addMessage("system", "📝 Nota guardada"))
     .on("log", (e) => addMessage("system", e.message))
     .on("muted", (e) => $("btn-mute").setAttribute("aria-pressed", String(e.value)))

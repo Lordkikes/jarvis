@@ -20,6 +20,7 @@ from pathlib import Path
 from ..alarmas import (
     Alarmas, dias_en_palabras, parse_dias, parse_hora,
 )
+from ..rutinas import PASOS, Rutinas, parse_pasos, paso_en_palabras
 from ..config import data_path
 from ..domotica import (
     DOMINIOS_DELICADOS, HomeAssistant, SinConexion, dominio_de,
@@ -702,6 +703,66 @@ class Toolbox:
             },
         },
         {
+            "name": "crear_rutina",
+            "description": (
+                "Guarda una ristra de cosas que se hacen siempre juntas: el "
+                "parte de la mañana, el de irse a dormir. Los pasos se dan en "
+                "orden, cada uno como «qué» o «qué: con qué». Si ya existe una "
+                "con ese nombre, la sustituye."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "nombre": {"type": "string",
+                               "description": "Cómo la llama, p. ej. «buenos días»"},
+                    "pasos": {"type": "string",
+                              "description": "Separados por comas y en orden. "
+                                             "Valen: saludo, tiempo[: ciudad], "
+                                             "agenda, recordatorios, novedades, "
+                                             "decir: frase, escena: nombre, "
+                                             "encender: dispositivo, musica: qué"},
+                    "hora": {"type": "string",
+                             "description": "Opcional, hora local en 24 h para "
+                                            "que se haga sola"},
+                    "dias": {"type": "string",
+                             "description": "«laborables», «diario» o los días, "
+                                            "si la quiere a una hora"},
+                    "al_parar_la_alarma": {"type": "boolean", "default": False,
+                                           "description": "En vez de a una "
+                                                          "hora: en cuanto "
+                                                          "apague el despertador"},
+                },
+                "required": ["nombre", "pasos"],
+            },
+        },
+        {
+            "name": "ver_rutinas",
+            "description": "Las rutinas guardadas, sus pasos y cuándo se hacen.",
+            "input_schema": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "ejecutar_rutina",
+            "description": ("Hace una rutina ahora mismo, sin esperar a su "
+                            "hora. Devuelve lo que hay que decirle: léeselo."),
+            "input_schema": {
+                "type": "object",
+                "properties": {"cual": {"type": "string"}},
+            },
+        },
+        {
+            "name": "borrar_rutina",
+            "description": "Borra una rutina guardada.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "cual": {"type": "string"},
+                    "confirmar": {"type": "boolean", "default": False,
+                                  "description": "True únicamente después de "
+                                                 "que le hayas leído la "
+                                                 "propuesta y haya dicho que sí"},
+                },
+            },
+        },
+        {
             "name": "estado_del_sistema",
             "description": "CPU, memoria y disco del equipo donde corre Jarvis.",
             "input_schema": {"type": "object", "properties": {}},
@@ -767,6 +828,8 @@ class Toolbox:
         # Una alarma que suena en casa mientras duermes fuera no despierta a
         # nadie; el móvil sí, y solo la primera vuelta.
         self.avisar_alarmas = bool(cfg.get("tools.avisos.alarmas", True))
+        self.rutinas = Rutinas(
+            data_path(cfg.get("tools.routines_file", "data/routines.json")))
         # Emisoras y listas con nombre propio: lo que resuelve «pon Radio 3».
         self.favoritos = dict(cfg.get("tools.musica.favoritos", {}) or {})
         self.temporizadores = Temporizadores()
@@ -1207,7 +1270,7 @@ class Toolbox:
             lineas.append(linea)
         return "; ".join(lineas) + "."
 
-    def _tool_parar_alarma(self, args: dict) -> str:
+    async def _tool_parar_alarma(self, args: dict) -> str:
         if self.external_content_seen:
             # Callar una alarma es justo lo que no quieres que dicte un correo.
             return ("No toco las alarmas: en este turno he leído contenido de "
@@ -1228,13 +1291,20 @@ class Toolbox:
 
         paradas = self.alarmas.para()
         self.bus.emit("alarma", message="Alarma apagada", parada=True)
+
+        respuesta = "Apagada."
         if len(paradas) == 1 and paradas[0].get("dias"):
             proxima = _fecha(paradas[0].get("proxima"))
             if proxima is not None:
-                return (f"Apagada. La siguiente, "
-                        f"{self._dia_relativo(proxima)} a las "
-                        f"{paradas[0]['hora']}.")
-        return "Apagada."
+                respuesta = (f"Apagada. La siguiente, "
+                             f"{self._dia_relativo(proxima)} a las "
+                             f"{paradas[0]['hora']}.")
+
+        # Parar el despertador es la señal de que te has levantado, que es
+        # cuando tiene sentido el parte de la mañana. Va en la misma respuesta.
+        if (rutina := await self.rutinas_de_la_alarma()):
+            return f"{respuesta} {rutina}"
+        return respuesta
 
     def _tool_encender_alarma(self, args: dict) -> str:
         if self.external_content_seen:
@@ -1348,6 +1418,252 @@ class Toolbox:
                 await asyncio.to_thread(self.avisos.envia, mensaje, "Alarma",
                                         True)
         return len(avisos)
+
+    # -- rutinas -----------------------------------------------------------
+    def _tool_crear_rutina(self, args: dict) -> str:
+        if self.external_content_seen:
+            # Una rutina es una lista de órdenes que se repite cada día: lo
+            # último que quieres que escriba algo que has leído de fuera.
+            return ("No guardo rutinas: en este turno he leído contenido de "
+                    "fuera. Pídemelo otra vez en una frase aparte.")
+
+        pasos, sobran = parse_pasos(args.get("pasos"))
+        if not pasos:
+            return (f"No he entendido ningún paso. Valen: {_y(list(PASOS))}.")
+
+        hora = parse_hora(args.get("hora"))
+        por_alarma = bool(args.get("al_parar_la_alarma"))
+        resultado = self.rutinas.pon(args.get("nombre") or "", pasos, hora,
+                                     parse_dias(args.get("dias")), por_alarma)
+        if not resultado.get("ok"):
+            return f"No he podido: {resultado.get('motivo', '?')}."
+
+        rutina = resultado["rutina"]
+        self.bus.emit("rutina", message=f"Rutina «{rutina['nombre']}» guardada",
+                      nombre=rutina["nombre"])
+        texto = (f"Guardada la rutina «{rutina['nombre']}»: "
+                 f"{_y([paso_en_palabras(p) for p in pasos])}. "
+                 f"{self._cuando_la_rutina(rutina)}")
+        if sobran:
+            texto += f" No he entendido esto y lo he dejado fuera: {_y(sobran)}."
+        return texto
+
+    def _tool_ver_rutinas(self, args: dict) -> str:  # noqa: ARG002
+        if not (rutinas := self.rutinas.lista()):
+            return "No tienes rutinas guardadas."
+        return "; ".join(
+            f"«{r['nombre']}»: {_y([paso_en_palabras(p) for p in r['pasos']])}. "
+            f"{self._cuando_la_rutina(r)}" for r in rutinas)
+
+    async def _tool_ejecutar_rutina(self, args: dict) -> str:
+        rutina, aclaracion = self._resuelve_rutina(args.get("cual") or "")
+        if rutina is None:
+            return aclaracion
+        dicho = await self.ejecuta_rutina(rutina)
+        return dicho or f"Hecha la rutina «{rutina['nombre']}»."
+
+    def _tool_borrar_rutina(self, args: dict) -> str:
+        rutina, aclaracion = self._resuelve_rutina(args.get("cual") or "")
+        if rutina is None:
+            return aclaracion
+
+        propuesta = {"accion": "borrar_rutina", "id": rutina["id"]}
+        lectura = f"borrar la rutina «{rutina['nombre']}»"
+        if (pendiente := self._confirmacion(propuesta, bool(args.get("confirmar")),
+                                            lectura, "borrar")) is not None:
+            return pendiente
+
+        self.rutinas.quita(rutina["id"])
+        self.bus.emit("rutina", message=f"Rutina «{rutina['nombre']}» borrada")
+        return f"Borrada la rutina «{rutina['nombre']}»."
+
+    def _resuelve_rutina(self, cual: str) -> tuple[dict | None, str]:
+        if not (rutinas := self.rutinas.lista()):
+            return None, "No tienes rutinas guardadas."
+        if not (cual := (cual or "").strip()):
+            if len(rutinas) == 1:
+                return rutinas[0], ""
+            return None, ("Tienes varias, pregúntale cuál: "
+                          + _y([f"«{r['nombre']}»" for r in rutinas]) + ".")
+        if not (encontradas := self.rutinas.busca(cual)):
+            return None, (f"No tengo ninguna rutina que se llame «{cual}». "
+                          "Tienes: "
+                          + _y([f"«{r['nombre']}»" for r in rutinas]) + ".")
+        if len(encontradas) > 1:
+            return None, ("Hay varias que encajan, pregúntale cuál: "
+                          + _y([f"«{r['nombre']}»" for r in encontradas]) + ".")
+        return encontradas[0], ""
+
+    def _cuando_la_rutina(self, rutina: dict) -> str:
+        if rutina.get("disparador") == "alarma":
+            return "Se hace cuando pares el despertador."
+        if rutina.get("disparador") == "hora":
+            return (f"Se hace a las {rutina['hora']}, "
+                    f"{dias_en_palabras(rutina.get('dias', []))}.")
+        return "Se hace cuando la pidas."
+
+    # -- ejecución ---------------------------------------------------------
+    async def ejecuta_rutina(self, rutina: dict) -> str:
+        """Recorre los pasos y devuelve lo que hay que decir en voz alta.
+
+        Los pasos los fijó la persona y los recorre este bucle, no el modelo:
+        nada de lo que se lea por el camino puede añadir uno. Y un paso que
+        falle no se lleva por delante a los demás, que es justo lo que pasaría
+        con una tirada de herramientas encadenadas.
+        """
+        dichos = []
+        for paso in rutina.get("pasos", []):
+            try:
+                frase = await self._paso_de_rutina(paso)
+            except Exception as exc:  # noqa: BLE001 - un paso no tira la rutina
+                log.exception("fallo en el paso %s", paso.get("que"))
+                self.bus.emit("rutina", message=f"falló «{paso.get('que')}»: {exc}",
+                              paso=paso.get("que"))
+                continue
+            if frase:
+                dichos.append(frase)
+
+        texto = " ".join(dichos)
+        self.bus.emit("rutina", message=f"Rutina «{rutina.get('nombre', '')}»",
+                      nombre=rutina.get("nombre"), pasos=len(rutina.get("pasos", [])))
+        return texto
+
+    async def _paso_de_rutina(self, paso: dict) -> str:
+        que, con = paso.get("que", ""), paso.get("con", "")
+
+        if que == "saludo":
+            return self._saludo()
+        if que == "decir":
+            return con
+        if que == "tiempo":
+            return await self._tool_consultar_tiempo({"ciudad": con})
+        if que == "agenda":
+            return self._agenda_de_hoy()
+        if que == "recordatorios":
+            return self._recordatorios_de_hoy()
+        if que == "novedades":
+            return self._novedades_en_numeros()
+
+        # Los que actúan no narran: a las siete y media nadie quiere oír
+        # «hecho: modo desayuno», y si la luz no se enciende se ve.
+        if que == "escena":
+            resultado = self._tool_activar_escena({"cual": con})
+        elif que == "encender":
+            resultado = self._enciende_desde_rutina(con)
+        elif que == "musica":
+            resultado = self._tool_poner_musica({"que": con})
+        else:
+            return ""
+        self.bus.emit("rutina", message=f"{que} «{con}»: {resultado}", paso=que)
+        return ""
+
+    def _enciende_desde_rutina(self, que: str) -> str:
+        """Una rutina no abre cerraduras ni persianas: eso lo pides tú.
+
+        No basta con que la confirmación de dos pasos lo frene: dejar la
+        propuesta armada sin que nadie la haya oído es peor que no intentarlo.
+        Y «encender» una cerradura resulta que sí tiene servicio: `unlock`.
+        """
+        entidad = self._dispositivo(que)
+        if isinstance(entidad, str):
+            return entidad
+        if dominio_de(entidad.get("entity_id", "")) in DOMINIOS_DELICADOS:
+            return (f"«{nombre_de(entidad)}» no se toca desde una rutina; "
+                    "eso se pide en voz alta y se confirma.")
+        return self._tool_controlar_dispositivo({"que": que,
+                                                 "accion": "encender"})
+
+    def _saludo(self) -> str:
+        ahora = _ahora()
+        if 5 <= ahora.hour < 13:
+            saludo = "Buenos días"
+        elif ahora.hour < 21:
+            saludo = "Buenas tardes"
+        else:
+            saludo = "Buenas noches"
+        return (f"{saludo}. Son las {ahora:%H:%M} del {self.DIAS[ahora.weekday()]} "
+                f"{ahora.day} de {self.MESES[ahora.month - 1]}.")
+
+    def _agenda_de_hoy(self) -> str:
+        """Lo de hoy sí se dice entero: una agenda que no se dice no sirve."""
+        if self.store is None:
+            return "No tengo el calendario indexado."
+        ahora = _ahora()
+        manana = (ahora + timedelta(days=1)).replace(hour=0, minute=0, second=0,
+                                                     microsecond=0)
+        filas = self.store.upcoming(
+            source="calendario",
+            since=ahora.astimezone(timezone.utc).isoformat(timespec="seconds"),
+            until=manana.astimezone(timezone.utc).isoformat(timespec="seconds"),
+            limit=6)
+        if not filas:
+            return "Hoy no tienes nada en el calendario."
+        citas = [f"{fila.get('title', '')} a las "
+                 f"{(fila.get('created_at') or '')[11:16]}" for fila in filas]
+        return "Hoy: " + _y(citas) + "."
+
+    def _recordatorios_de_hoy(self) -> str:
+        """Si no hay ninguno se calla: la ausencia de noticias no es noticia."""
+        hoy = _ahora().date()
+        suyos = []
+        for recordatorio in self.recordatorios.pendientes():
+            cuando = _fecha(recordatorio.get("cuando"))
+            if cuando is not None and cuando.date() == hoy:
+                suyos.append(f"{recordatorio.get('texto', '')} a las {cuando:%H:%M}")
+        if not suyos:
+            return ""
+        return "Tienes apuntado: " + _y(suyos) + "."
+
+    #: De lo que llega de fuera solo salen números. Ver `jarvis/rutinas.py`.
+    NOVEDADES = (("correo", "correo", "correos"),
+                 ("rss", "artículo", "artículos"),
+                 (("bluesky", "mastodon", "reddit", "x"),
+                  "publicación", "publicaciones"))
+
+    def _novedades_en_numeros(self) -> str:
+        if self.store is None:
+            return ""
+        desde = (_ahora() - timedelta(days=1)).astimezone(timezone.utc).isoformat(
+            timespec="seconds")
+
+        partes = []
+        for fuentes, singular, plural in self.NOVEDADES:
+            fuentes = (fuentes,) if isinstance(fuentes, str) else fuentes
+            # 101 y no 100: así «cien» y «más de cien» se distinguen.
+            cuantos = sum(len(self.store.upcoming(source=fuente, since=desde,
+                                                  limit=101))
+                          for fuente in fuentes)
+            if cuantos == 0:
+                continue
+            cuanto = "más de 100" if cuantos > 100 else str(cuantos)
+            partes.append(f"{cuanto} {singular if cuantos == 1 else plural}")
+        if not partes:
+            return "Desde ayer no ha llegado nada."
+        return "Desde ayer: " + _y(partes) + "."
+
+    async def dispara_rutinas(self) -> int:
+        """Hace las que tocan por hora. Lo llama el bucle de la tubería.
+
+        Esta sí habla por su cuenta: no hay nadie esperando la respuesta.
+        """
+        vencidas = await asyncio.to_thread(self.rutinas.vencidas)
+        for rutina in vencidas:
+            dicho = await self.ejecuta_rutina(rutina)
+            if dicho and self.on_announce is not None:
+                await self.on_announce(dicho)
+        return len(vencidas)
+
+    async def rutinas_de_la_alarma(self) -> str:
+        """Las que esperaban a que pararas el despertador.
+
+        Devuelve el texto en vez de decirlo: viene de pararla, y ahí ya hay
+        una respuesta en marcha a la que engancharse. Dos voces a la vez, no.
+        """
+        dichos = []
+        for rutina in await asyncio.to_thread(self.rutinas.por_alarma):
+            if (dicho := await self.ejecuta_rutina(rutina)):
+                dichos.append(dicho)
+        return " ".join(dichos)
 
     def _tool_guardar_nota(self, args: dict) -> str:
         notes = _json_store(self.notes_file)
