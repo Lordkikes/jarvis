@@ -520,6 +520,43 @@ Dos detalles más:
   correo o la agenda, igual que `abrir`: un correo podría estar diciendo
   «enciende el horno». Preguntar por el estado no, que eso no actúa.
 
+### Escenas
+
+```
+«pon el modo cine»                    → la escena, venga de donde venga
+«¿qué escenas tengo?»                 → las tuyas y las de Home Assistant
+«guarda esto como ambiente de cena»   → la luz de ahora mismo, con nombre
+```
+
+Activarlas ya funcionaba —una escena es un dominio más—, pero dicho así no se
+encuentra: nadie piensa que «modo cine» sea un dispositivo. Ahora tienen
+nombre propio y se pueden enumerar. Los **guiones** (`script`) entran en el
+mismo saco, porque para una persona «llegando a casa» es una escena aunque
+por dentro sea otra cosa.
+
+**Lo que de verdad faltaba es guardar.** Home Assistant tiene `scene.create`
+para eso, pero **las escenas creadas así se pierden al reiniciar** —está
+documentado, y la petición de hacerlas persistentes se cerró como «no
+planeado»—. Una escena que se evapora sin avisar es peor que no tenerla.
+
+Así que la instantánea se guarda **aquí**, en `data/scenes.json`, y se
+recupera con `scene.apply`, que acepta los estados directamente y no necesita
+que exista ninguna escena en el servidor. Consecuencia: **tus escenas
+sobreviven a un reinicio de Home Assistant**, y hay una prueba que lo
+comprueba borrando las escenas del servidor entre guardar y recuperar.
+
+Detalles:
+
+- Se guarda también **lo que está apagado**. Una escena que solo enciende no
+  sirve para volver a como estaba, que es justo para lo que se guarda.
+- De lo apagado no se guarda el brillo, y lo que no responde se queda fuera.
+- Entran luces, enchufes, ventiladores y termostatos. **El reproductor no**:
+  no pinta nada en un «modo cine».
+- Crear una escena nueva es inocuo y no pide permiso. **Pisar una que ya
+  existe sí**, porque se pierde la anterior. Borrar, también.
+- Si tienes una escena tuya y otra de Home Assistant con el mismo nombre,
+  manda la tuya: si te molestaste en guardarla, es esa la que quieres.
+
 ### Música
 
 Dos caminos, y Jarvis elige solo:
@@ -650,6 +687,7 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 - Guardar y leer notas.
 - Llevarte listas de la compra: añadir, tachar y vaciar, hablando.
 - Encender, apagar y consultar lo que tengas en Home Assistant.
+- Poner escenas, y guardar la luz que hay ahora como una escena nueva.
 - Manejar la música: pausar, saltar de canción, subir el volumen y poner
   algo concreto que le pidas.
 - Recordar datos tuyos entre sesiones (`data/memory.json`).
@@ -697,6 +735,7 @@ jarvis/
 │   │   └── rrule.py        # ★ expansión de repeticiones
 │   ├── listas.py           # listas de la compra, en un JSON local
 │   ├── domotica.py         # ★ cliente de Home Assistant
+│   ├── escenas.py          # escenas propias, con su instantánea
 │   ├── musica.py           # altavoces de casa y reproductor del equipo
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
@@ -907,8 +946,8 @@ Ideas para seguir construyendo, más o menos por dificultad:
 1. **Más fuentes**: las ocho actuales cubren correo, código, redes, feeds y
    calendario. LinkedIn seguirá fuera mientras no abra una API para cuentas
    personales.
-2. **Más herramientas**: escenas por voz, y leer las etiquetas de la
-   biblioteca en vez de fiarse del nombre del fichero.
+2. **Más herramientas**: leer las etiquetas de la biblioteca de música en
+   vez de fiarse del nombre del fichero.
 3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
 4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.
 5. **Acceso desde el móvil**: exponer el servidor en la red local (`server.host: 0.0.0.0`) — hazlo solo en redes de confianza, no hay autenticación.
@@ -920,8 +959,8 @@ Ideas para seguir construyendo, más o menos por dificultad:
 - El audio nunca sale del equipo si usas `faster-whisper` + `piper`. La
   cancelación de eco también es local: es una librería de C++, no un servicio.
 - Lo que sí viaja a la API de Anthropic es el **texto** de la conversación.
-- Las notas, las listas, la memoria y el índice de correos se guardan **en
-  texto plano** en `data/`. Con el correo activado ese directorio pasa a ser material sensible:
+- Las notas, las listas, las escenas, la memoria y el índice de correos se
+  guardan **en texto plano** en `data/`. Con el correo activado ese directorio pasa a ser material sensible:
   está en `.gitignore`, pero cífralo o bórralo si compartes el equipo.
 - `tools.allow_system: false` desactiva abrir aplicaciones y leer el estado del equipo.
 
