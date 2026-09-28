@@ -313,6 +313,20 @@ distintas pasan por tu línea temporal al día, no cada cuánto sincroniza
 Jarvis. Con un timeline de 200 publicaciones nuevas al día son unos 6 $ al
 mes; `limit` pone el tope por sincronización.
 
+Se pueden leer **tres corrientes de lo tuyo**, y las tres entran en Owned
+Reads:
+
+| `lee:` | Qué trae | Para preguntar |
+|---|---|---|
+| `timeline` | Tu línea temporal cronológica | «¿qué se cuenta?» |
+| `menciones` | Lo que te nombra a ti | «¿me han mencionado?» |
+| `propias` | Lo que has publicado tú | «¿qué escribí ayer?» |
+
+**Cada corriente es una petición aparte y se cobra aparte**, así que solo
+viene encendido el timeline: quien no toque nada no empieza a gastar el
+triple. Las menciones llevan su propia herramienta —`menciones_recientes`—
+porque «¿me han mencionado?» y «¿qué se cuenta?» son dos preguntas distintas.
+
 ```yaml
 sources:
   x:
@@ -320,7 +334,20 @@ sources:
     user_id: ""            # tu id numérico (ver abajo)
     limit: 40
     interval_minutes: 60   # su propio ritmo, más espaciado que el resto
+    lee: [timeline, menciones]
 ```
+
+> **`user_id` tiene que ser el tuyo.** La tarifa de Owned Read solo aplica
+> cuando el usuario autenticado es el dueño de la app; con el id de otra
+> persona esas lecturas salen por la tarifa normal.
+
+Lo mismo que aparece en dos corrientes se indexa **una vez**, y manda la más
+concreta: si algo pasa por tu timeline y además te nombra, es una mención.
+
+**Los marcadores se quedan fuera** aunque también sean Owned Reads. La
+documentación y los foros no se ponen de acuerdo sobre si aceptan OAuth 1.0a
+—hay informes de 403 pidiendo OAuth 2.0—, y prefiero no añadir un camino que
+igual no funciona. Si lo confirmas, es una entrada más en la tabla.
 
 ```bash
 # Portal de desarrolladores → tu app → Keys and tokens. Las cuatro, con
@@ -1013,7 +1040,7 @@ jarvis/
 │   │   ├── bluesky.py      # línea temporal de Bluesky
 │   │   ├── mastodon.py     # línea temporal de Mastodon
 │   │   ├── reddit.py       # portada o subreddits elegidos
-│   │   ├── x_twitter.py    # línea temporal de X (de pago)
+│   │   ├── x_twitter.py    # X: timeline, menciones y lo tuyo (de pago)
 │   │   ├── oauth1.py       # firma OAuth 1.0a, que es lo que X acepta
 │   │   ├── rss.py          # feeds RSS 2.0, RSS 1.0 y Atom
 │   │   ├── calendar_dav.py # calendario por CalDAV o por .ics

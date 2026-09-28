@@ -116,6 +116,7 @@ def make_sources(cfg) -> list:
                 user_id=cfg.get("sources.x.user_id", ""),
                 limit=int(cfg.get("sources.x.limit", 40)),
                 interval_minutes=int(cfg.get("sources.x.interval_minutes", 0)),
+                lee=cfg.get("sources.x.lee", None),
             ))
         except Exception as exc:  # noqa: BLE001
             log.warning("fuente 'x' no disponible (%s)", exc)

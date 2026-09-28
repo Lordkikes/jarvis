@@ -18,9 +18,15 @@ from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from jarvis.bus import EventBus  # noqa: E402
+from jarvis.config import Config  # noqa: E402
+from jarvis.llm.tools import Toolbox  # noqa: E402
 from jarvis.sources import x_twitter as x_module  # noqa: E402
 from jarvis.sources.store import Store  # noqa: E402
-from jarvis.sources.x_twitter import XSource, authors_by_id, parse_post  # noqa: E402
+from jarvis.sources.x_twitter import (  # noqa: E402
+    CORRIENTES, POR_DEFECTO, XSource, authors_by_id, corrientes_validas,
+    parse_post,
+)
 
 CREDENCIALES = {
     "JARVIS_X_API_KEY": "clave",
@@ -113,6 +119,10 @@ class TestConfiguracion(unittest.TestCase):
 class FakeX(BaseHTTPRequestHandler):
     peticiones: list = []
     status = 200
+    #: Qué devolver según cómo acabe la ruta. Lo que no esté, va al genérico.
+    por_ruta: dict = {}
+    #: Rutas que contestan con error, para probar una corriente caída.
+    rotas: tuple = ()
 
     def log_message(self, *args):
         pass
@@ -127,19 +137,27 @@ class FakeX(BaseHTTPRequestHandler):
         if partes.path.endswith("/users/me"):
             payload = {"data": {"id": "7", "username": "yelko"}}
         else:
-            payload = respuesta()
+            payload = next((p for final, p in FakeX.por_ruta.items()
+                            if partes.path.endswith(final)), respuesta())
+        estado = FakeX.status
+        if any(partes.path.endswith(r) for r in FakeX.rotas):
+            estado, payload = 503, {"title": "vaya"}
         cuerpo = json.dumps(payload).encode()
-        self.send_response(FakeX.status)
+        self.send_response(estado)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(cuerpo)))
         self.end_headers()
         self.wfile.write(cuerpo)
 
 
-class TestClienteContraUnaApiFalsa(unittest.TestCase):
+class CasoConApiFalsa(unittest.TestCase):
+    """El montaje: un servidor de mentira en el sitio de api.x.com."""
+
     def setUp(self):
         FakeX.peticiones = []
         FakeX.status = 200
+        FakeX.por_ruta = {}
+        FakeX.rotas = ()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), FakeX)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         base = f"http://127.0.0.1:{self.server.server_address[1]}/2"
@@ -158,6 +176,8 @@ class TestClienteContraUnaApiFalsa(unittest.TestCase):
         with mock.patch.dict(os.environ, CREDENCIALES):
             return XSource(**kwargs)
 
+
+class TestClienteContraUnaApiFalsa(CasoConApiFalsa):
     def test_lee_la_linea_temporal_y_la_indexa(self):
         self.assertEqual(self.fuente(user_id="7").sync(self.store), 1)
         self.assertEqual(self.store.counts(), {"x": 1})
@@ -207,6 +227,174 @@ class TestClienteContraUnaApiFalsa(unittest.TestCase):
         self.assertEqual(fuente.sync(self.store), 1)
         self.assertEqual(fuente.sync(self.store), 0)
         self.assertEqual(self.store.counts(), {"x": 1})
+
+
+class TestCorrientes(unittest.TestCase):
+    """Qué se lee de lo tuyo. Las tres son Owned Reads; los marcadores no van."""
+
+    def test_por_defecto_solo_el_timeline(self):
+        """Quien no toque nada no empieza a gastar el triple."""
+        self.assertEqual(POR_DEFECTO, ("timeline",))
+        self.assertEqual(corrientes_validas(None), ("timeline",))
+        self.assertEqual(corrientes_validas([]), ("timeline",))
+
+    def test_las_que_hay(self):
+        self.assertEqual(set(CORRIENTES),
+                         {"timeline", "menciones", "propias"})
+
+    def test_se_ordenan_por_precedencia(self):
+        """De menos a más concreta, que es como se pisan luego."""
+        self.assertEqual(corrientes_validas(["menciones", "timeline"]),
+                         ("timeline", "menciones"))
+
+    def test_en_una_cadena_tambien(self):
+        self.assertEqual(corrientes_validas("propias, menciones"),
+                         ("propias", "menciones"))
+
+    def test_lo_que_no_existe_se_ignora(self):
+        self.assertEqual(corrientes_validas(["marcadores", "propias"]),
+                         ("propias",))
+
+    def test_si_no_queda_nada_valido_el_timeline(self):
+        self.assertEqual(corrientes_validas(["marcadores"]), ("timeline",))
+
+    def test_cada_corriente_marca_el_tipo(self):
+        for corriente, esperado in (("timeline", "publicación"),
+                                    ("menciones", "mención"),
+                                    ("propias", "publicación propia")):
+            with self.subTest(corriente=corriente):
+                item = parse_post(tweet(), AUTORES, corriente)
+                self.assertEqual(item.kind, esperado)
+                self.assertEqual(item.meta["corriente"], corriente)
+
+    def test_una_corriente_rara_no_revienta(self):
+        self.assertEqual(parse_post(tweet(), AUTORES, "marcadores").kind,
+                         "publicación")
+
+
+class TestVariasCorrientes(CasoConApiFalsa):
+    def rutas(self) -> list[str]:
+        return [p["ruta"] for p in FakeX.peticiones]
+
+    def test_pide_una_por_corriente(self):
+        self.fuente(user_id="7",
+                    lee=["timeline", "menciones", "propias"]).sync(self.store)
+        rutas = self.rutas()
+        self.assertEqual(len(rutas), 3)
+        for final in ("timelines/reverse_chronological", "mentions", "tweets"):
+            self.assertTrue(any(r.endswith(f"/users/7/{final}") for r in rutas),
+                            rutas)
+
+    def test_lo_propio_deja_fuera_respuestas_y_reenvios(self):
+        """«Lo que he publicado» no son las respuestas ni lo que reenvío."""
+        self.fuente(user_id="7", lee=["propias"]).sync(self.store)
+        peticion, = FakeX.peticiones
+        self.assertEqual(peticion["params"]["exclude"], "retweets,replies")
+
+    def test_el_timeline_no_lleva_exclude(self):
+        self.fuente(user_id="7").sync(self.store)
+        self.assertNotIn("exclude", FakeX.peticiones[0]["params"])
+
+    def test_el_id_se_resuelve_una_vez_para_las_tres(self):
+        """Resolverlo por corriente serían dos lecturas pagadas de más."""
+        self.fuente(lee=["timeline", "menciones", "propias"]).sync(self.store)
+        self.assertEqual(sum(r.endswith("/users/me") for r in self.rutas()), 1)
+
+    def test_lo_mismo_en_dos_corrientes_se_indexa_una_vez(self):
+        FakeX.por_ruta = {"mentions": respuesta(tweet()),
+                          "timelines/reverse_chronological": respuesta(tweet())}
+        self.assertEqual(
+            self.fuente(user_id="7", lee=["timeline", "menciones"]).sync(self.store),
+            1)
+        self.assertEqual(self.store.counts(), {"x": 1})
+
+    def test_y_manda_la_corriente_mas_concreta(self):
+        """Si además de pasar por tu timeline te nombra, es una mención."""
+        FakeX.por_ruta = {"mentions": respuesta(tweet()),
+                          "timelines/reverse_chronological": respuesta(tweet())}
+        self.fuente(user_id="7", lee=["menciones", "timeline"]).sync(self.store)
+        self.assertEqual(self.store.recent(source="x")[0]["kind"], "mención")
+
+    def test_una_corriente_caida_no_se_lleva_a_las_otras(self):
+        FakeX.rotas = ("mentions",)
+        FakeX.por_ruta = {"timelines/reverse_chronological":
+                          respuesta(tweet(id="2"))}
+        leidas = self.fuente(user_id="7",
+                             lee=["timeline", "menciones"]).sync(self.store)
+        self.assertEqual(leidas, 1)
+        self.assertEqual(self.store.counts(), {"x": 1})
+
+
+class TestFiltroPorTipo(unittest.TestCase):
+    """Lo que hace posible preguntar «¿me han mencionado?» y no otra cosa."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.tmp.name) / "index.db")
+        self.store.upsert([
+            parse_post(tweet(id="1"), AUTORES, "menciones"),
+            parse_post(tweet(id="2", text="otra"), AUTORES, "timeline"),
+        ])
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    def test_solo_las_menciones(self):
+        filas = self.store.recent(source="x", kind="mención")
+        self.assertEqual([f["id"] for f in filas], ["x:1"])
+
+    def test_sin_filtro_salen_las_dos(self):
+        self.assertEqual(len(self.store.recent(source="x")), 2)
+
+    def test_un_tipo_que_no_hay(self):
+        self.assertEqual(self.store.recent(source="x", kind="marcador"), [])
+
+
+class TestHerramientaDeMenciones(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.tmp.name) / "index.db")
+        cfg = Config({
+            "tools": {"notes_file": str(Path(self.tmp.name) / "n.json"),
+                      "memory_file": str(Path(self.tmp.name) / "m.json"),
+                      "lists_file": str(Path(self.tmp.name) / "l.json")},
+            "llm": {"web_search": False},
+        })
+        with mock.patch.dict(os.environ, {"JARVIS_HASS_TOKEN": ""}):
+            self.caja = Toolbox(cfg, EventBus(), store=self.store)
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    async def test_sin_menciones_dice_donde_se_activan(self):
+        salida = await self.caja.run("menciones_recientes", {})
+        self.assertIn("sources.x.lee", salida)
+
+    async def test_solo_las_menciones(self):
+        self.store.upsert([
+            parse_post(tweet(id="1", text="te nombro"), AUTORES, "menciones"),
+            parse_post(tweet(id="2", text="esto es del timeline"), AUTORES,
+                       "timeline"),
+        ])
+        salida = await self.caja.run("menciones_recientes", {})
+        self.assertIn("te nombro", salida)
+        self.assertNotIn("esto es del timeline", salida)
+
+    async def test_vienen_valladas_como_todo_lo_de_fuera(self):
+        """Una mención es texto que escribe cualquiera: datos, no órdenes."""
+        self.store.upsert([parse_post(tweet(id="1"), AUTORES, "menciones")])
+        salida = await self.caja.run("menciones_recientes", {})
+        self.assertIn("DATOS EXTERNOS", salida)
+        self.assertTrue(self.caja.external_content_seen)
+
+    async def test_sin_indice_no_se_ofrece(self):
+        cfg = Config({"tools": {}, "llm": {"web_search": False}})
+        with mock.patch.dict(os.environ, {"JARVIS_HASS_TOKEN": ""}):
+            caja = Toolbox(cfg, EventBus())
+        self.assertNotIn("menciones_recientes",
+                         [e["name"] for e in caja.definitions()])
 
 
 if __name__ == "__main__":

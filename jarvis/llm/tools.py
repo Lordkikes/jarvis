@@ -282,6 +282,18 @@ class Toolbox:
             },
         },
         {
+            "name": "menciones_recientes",
+            "description": ("Lo último en X que te nombra a ti. Distinto de "
+                            "`publicaciones_recientes`, que es todo lo que "
+                            "pasa por tu línea temporal."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "limite": {"type": "integer", "default": 5, "maximum": 15},
+                },
+            },
+        },
+        {
             "name": "articulos_recientes",
             "description": "Lo último publicado en los feeds RSS o Atom que "
                            "sigues: blogs, noticias, notas de versión.",
@@ -874,7 +886,7 @@ class Toolbox:
         if self.store is None:
             hidden |= {"buscar_en_mis_fuentes", "correos_recientes",
                        "sesiones_recientes", "publicaciones_recientes",
-                       "articulos_recientes", "agenda"}
+                       "articulos_recientes", "menciones_recientes", "agenda"}
         specs = [dict(spec) for spec in self.SPECS if spec["name"] not in hidden]
         if self.cfg.get("llm.web_search", False):
             # Herramienta del lado del servidor: la ejecuta la API, no nosotros.
@@ -2347,6 +2359,14 @@ class Toolbox:
         if not rows:
             return (f"No hay nada en el calendario en los próximos {dias} días "
                     "(o la fuente no está activada en config.yaml).")
+        return self._external(self._format(rows))
+
+    def _tool_menciones_recientes(self, args: dict) -> str:
+        rows = self.store.recent(source="x", kind="mención",
+                                 limit=min(15, int(args.get("limite", 5))))
+        if not rows:
+            return ("No hay menciones indexadas. Hace falta «menciones» en "
+                    "sources.x.lee, y que la fuente esté activada.")
         return self._external(self._format(rows))
 
     def _tool_articulos_recientes(self, args: dict) -> str:
