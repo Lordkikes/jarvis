@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ..config import data_path
+from ..listas import POR_DEFECTO, Listas, normaliza
 from ..sources import ical
 from ..http import AsyncClient
 
@@ -35,6 +36,25 @@ def _fecha(valor) -> datetime | None:
     except (TypeError, ValueError):
         return None
     return fecha.astimezone() if fecha.tzinfo is None else fecha
+
+
+def _articulos(args: dict) -> list[str]:
+    """Acepta la lista que pide el esquema, y también una cadena suelta.
+
+    El modelo a veces manda «leche, pan» en vez de dos elementos; partirlo
+    aquí sale más barato que perder la petición.
+    """
+    crudo = args.get("articulos") or []
+    if isinstance(crudo, str):
+        crudo = crudo.split(",")
+    return [t.strip() for t in crudo if isinstance(t, str) and t.strip()]
+
+
+def _y(cosas: list[str]) -> str:
+    """«leche, pan y huevos», que es como se dice en voz alta."""
+    if len(cosas) <= 1:
+        return "".join(cosas)
+    return f"{', '.join(cosas[:-1])} y {cosas[-1]}"
 
 
 def _sin_tildes(texto: str) -> str:
@@ -280,6 +300,63 @@ class Toolbox:
             },
         },
         {
+            "name": "ver_lista",
+            "description": "Lee una lista: qué queda por comprar y qué ya está "
+                           "tachado. Sin `lista`, la de la compra.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "lista": {"type": "string",
+                              "description": "Nombre de la lista; por defecto, "
+                                             "la de la compra"},
+                },
+            },
+        },
+        {
+            "name": "anadir_a_lista",
+            "description": "Añade artículos a una lista. Pasa todos los que "
+                           "diga de una vez: «leche, pan y huevos» son tres "
+                           "artículos en una sola llamada, no tres llamadas.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "articulos": {"type": "array", "items": {"type": "string"}},
+                    "lista": {"type": "string"},
+                },
+                "required": ["articulos"],
+            },
+        },
+        {
+            "name": "tachar_de_lista",
+            "description": "Marca artículos como comprados. Con `quitar` en "
+                           "true los borra en vez de tacharlos, que es lo que "
+                           "toca si dice que ya no hace falta.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "articulos": {"type": "array", "items": {"type": "string"}},
+                    "lista": {"type": "string"},
+                    "quitar": {"type": "boolean", "default": False},
+                },
+                "required": ["articulos"],
+            },
+        },
+        {
+            "name": "vaciar_lista",
+            "description": "Vacía una lista entera. Dos pasos: la primera "
+                           "llamada solo dice qué se va a borrar, y hace falta "
+                           "que la persona diga que sí. Con `solo_tachados` "
+                           "quita únicamente lo ya comprado.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "lista": {"type": "string"},
+                    "solo_tachados": {"type": "boolean", "default": False},
+                    "confirmar": {"type": "boolean", "default": False},
+                },
+            },
+        },
+        {
             "name": "estado_del_sistema",
             "description": "CPU, memoria y disco del equipo donde corre Jarvis.",
             "input_schema": {"type": "object", "properties": {}},
@@ -312,6 +389,7 @@ class Toolbox:
         self.allow_system = bool(cfg.get("tools.allow_system", True))
         self.notes_file = data_path(cfg.get("tools.notes_file", "data/notes.json"))
         self.memory_file = data_path(cfg.get("tools.memory_file", "data/memory.json"))
+        self.listas = Listas(data_path(cfg.get("tools.lists_file", "data/lists.json")))
         self._timers: set[asyncio.Task] = set()
 
     # -- contenido externo -------------------------------------------------
@@ -440,6 +518,96 @@ class Toolbox:
         self.memory_file.write_text(json.dumps(memory, ensure_ascii=False, indent=2),
                                     encoding="utf-8")
         return "Lo recordaré."
+
+    # -- listas ------------------------------------------------------------
+    # Lo que hay aquí lo ha dictado la persona, así que no se valla como
+    # DATOS EXTERNOS: no es texto que le haya mandado un tercero.
+    @staticmethod
+    def _en_voz(articulos: list[dict]) -> str:
+        return ", ".join(a["texto"] for a in articulos)
+
+    def _tool_ver_lista(self, args: dict) -> str:
+        lista = self.listas.ver(args.get("lista") or POR_DEFECTO)
+        pendientes = self.listas.pendientes(lista)
+        tachados = self.listas.tachados(lista)
+        if not pendientes and not tachados:
+            otras = [n for n in self.listas.nombres() if n != lista["nombre"]]
+            sugerencia = f" Tienes: {', '.join(otras)}." if otras else ""
+            return f"La lista de {lista['nombre']} está vacía.{sugerencia}"
+        if not pendientes:
+            return (f"En {lista['nombre']} ya está todo tachado "
+                    f"({len(tachados)} artículos).")
+
+        texto = (f"En {lista['nombre']}, {len(pendientes)} por comprar: "
+                 f"{self._en_voz(pendientes)}.")
+        if tachados:
+            texto += f" Tachados ya {len(tachados)}."
+        return texto
+
+    def _tool_anadir_a_lista(self, args: dict) -> str:
+        articulos = _articulos(args)
+        if not articulos:
+            return "¿Qué añado?"
+
+        r = self.listas.anade(articulos, args.get("lista") or POR_DEFECTO)
+        self.bus.emit("lista", nombre=r["lista"], añadidos=len(r["nuevos"]))
+        partes = []
+        if r["nuevos"]:
+            partes.append(f"añadido {_y(r['nuevos'])}")
+        if r["destachados"]:
+            partes.append(f"vuelve a hacer falta {_y(r['destachados'])}")
+        if r["repetidos"]:
+            partes.append(f"ya estaba {_y(r['repetidos'])}")
+        if not partes:
+            return "No he añadido nada."
+        return f"En {r['lista']}: {'; '.join(partes)}."
+
+    def _tool_tachar_de_lista(self, args: dict) -> str:
+        articulos = _articulos(args)
+        if not articulos:
+            return "¿Qué tacho?"
+
+        quitar = bool(args.get("quitar"))
+        r = self.listas.tacha(articulos, args.get("lista") or POR_DEFECTO, quitar)
+        if r.get("no_existe"):
+            return f"No tengo ninguna lista de {r['lista']}."
+        self.bus.emit("lista", nombre=r["lista"], tachados=len(r["hechos"]))
+
+        partes = []
+        if r["hechos"]:
+            partes.append(f"{'quitado' if quitar else 'tachado'} {_y(r['hechos'])}")
+        if r["no_estan"]:
+            partes.append(f"no estaba {_y(r['no_estan'])}")
+        if not partes:
+            return "No he cambiado nada."
+        return f"En {r['lista']}: {'; '.join(partes)}."
+
+    def _tool_vaciar_lista(self, args: dict) -> str:
+        nombre = args.get("lista") or POR_DEFECTO
+        solo = bool(args.get("solo_tachados"))
+        lista = self.listas.ver(nombre)
+        objetivo = (self.listas.tachados(lista) if solo
+                    else lista.get("articulos", []))
+        if not objetivo:
+            return (f"En {lista['nombre']} no hay nada "
+                    f"{'tachado' if solo else 'que vaciar'}.")
+
+        # Vaciar es el único movimiento de las listas que pierde algo que la
+        # persona dictó, así que pasa por la misma confirmación que el calendario.
+        propuesta = {"accion": "vaciar", "lista": normaliza(nombre), "solo": solo}
+        lectura = (f"quitar {len(objetivo)} artículos "
+                   f"{'ya tachados ' if solo else ''}de {lista['nombre']}"
+                   f"{'' if solo else ', tachados y sin tachar'}: "
+                   f"{self._en_voz(objetivo[:8])}"
+                   f"{'…' if len(objetivo) > 8 else ''}.")
+        if (pendiente := self._confirmacion(propuesta, bool(args.get("confirmar")),
+                                            lectura, "vaciar")) is not None:
+            return pendiente
+
+        r = self.listas.vacia(nombre, solo)
+        self.bus.emit("lista", nombre=r["lista"], vaciados=r["quitados"])
+        quedan = f", quedan {r['quedan']}" if r["quedan"] else ""
+        return f"Vaciados {r['quitados']} de {r['lista']}{quedan}."
 
     # -- fuentes indexadas -------------------------------------------------
     @staticmethod

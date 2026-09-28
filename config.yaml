@@ -149,6 +149,7 @@ tools:
   allow_system: true        # abrir apps/URLs y leer estado del equipo
   notes_file: data/notes.json
   memory_file: data/memory.json
+  lists_file: data/lists.json
 
 tts:
   provider: piper           # piper | elevenlabs | system | none

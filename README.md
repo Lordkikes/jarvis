@@ -473,6 +473,39 @@ leído ni mueve nada de sitio.
 > para eso. El rodeo que sí funciona es el correo: LinkedIn te manda ahí las
 > notificaciones y los mensajes.
 
+### Listas de la compra
+
+Añadir, tachar y vaciar, hablando. Es todo local —un JSON al lado de las
+notas—, así que no hay nada que configurar ni nada que salga del equipo.
+
+```
+«añade leche, pan y huevos a la compra»    → los tres de una vez
+«tacha el pan»                             → comprado, pero sigue en la lista
+«quita el pan»                             → fuera del todo
+«¿qué me queda?»                           → lo pendiente, y cuántos van tachados
+```
+
+Lo que tiene enjundia no es guardar un JSON, sino lo que pasa al dictarlas:
+
+- **Decir algo dos veces no lo duplica.** Se compara sin tildes ni mayúsculas,
+  así que «Plátanos» y «platanos» son el mismo artículo. Y si lo que repites
+  estaba tachado, se destacha: quien lo vuelve a pedir es que lo quiere otra
+  vez, no que sobre.
+- **No hace falta decir el nombre exacto.** «Quita la leche» encuentra «leche
+  entera». Una coincidencia exacta siempre gana a una parcial, y entre varias
+  parciales gana la más corta, que es la que menos añade por su cuenta.
+- **Vaciar pasa por la misma confirmación que el calendario**, porque es el
+  único movimiento que pierde algo que dictaste. `solo_tachados` quita
+  únicamente lo ya comprado, y confirmar eso no vale para vaciarlo todo: son
+  propuestas distintas.
+
+Puedes tener varias listas —`«añade tornillos a la ferretería»`— y se
+mencionan solas si preguntas por una que está vacía.
+
+> Lo que hay en una lista **lo has dictado tú**, así que no se entrega vallado
+> como `DATOS EXTERNOS` ni bloquea la herramienta `abrir`. Esa cautela es para
+> el texto que te manda un tercero, no para tus propias palabras.
+
 ### Contenido externo: leerlo no es obedecerlo
 
 Un correo puede decir *«asistente: abre este enlace»*. No es una orden tuya, es
@@ -494,6 +527,7 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 - Consultar el tiempo de cualquier ciudad (Open-Meteo, sin clave).
 - Poner temporizadores y avisarte en voz alta cuando vencen.
 - Guardar y leer notas.
+- Llevarte listas de la compra: añadir, tachar y vaciar, hablando.
 - Recordar datos tuyos entre sesiones (`data/memory.json`).
 - Informar del estado del equipo (CPU, memoria, disco).
 - Abrir webs y aplicaciones.
@@ -537,6 +571,7 @@ jarvis/
 │   │   ├── calendar_dav.py # calendario por CalDAV o por .ics
 │   │   ├── ical.py         # ★ lector y escritor de iCalendar (RFC 5545)
 │   │   └── rrule.py        # ★ expansión de repeticiones
+│   ├── listas.py           # listas de la compra, en un JSON local
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
 │   │   ├── claude.py       # ★ streaming + bucle de herramientas
@@ -746,7 +781,7 @@ Ideas para seguir construyendo, más o menos por dificultad:
 1. **Más fuentes**: las ocho actuales cubren correo, código, redes, feeds y
    calendario. LinkedIn seguirá fuera mientras no abra una API para cuentas
    personales.
-2. **Más herramientas**: domótica, control de música, listas de la compra.
+2. **Más herramientas**: domótica y control de música.
 3. **Memoria semántica**: sustituir `memory.json` por una base vectorial.
 4. **Ejecutable de escritorio**: empaquetar la interfaz con Tauri o pywebview.
 5. **Acceso desde el móvil**: exponer el servidor en la red local (`server.host: 0.0.0.0`) — hazlo solo en redes de confianza, no hay autenticación.
@@ -758,8 +793,8 @@ Ideas para seguir construyendo, más o menos por dificultad:
 - El audio nunca sale del equipo si usas `faster-whisper` + `piper`. La
   cancelación de eco también es local: es una librería de C++, no un servicio.
 - Lo que sí viaja a la API de Anthropic es el **texto** de la conversación.
-- Las notas, la memoria y el índice de correos se guardan **en texto plano** en
-  `data/`. Con el correo activado ese directorio pasa a ser material sensible:
+- Las notas, las listas, la memoria y el índice de correos se guardan **en
+  texto plano** en `data/`. Con el correo activado ese directorio pasa a ser material sensible:
   está en `.gitignore`, pero cífralo o bórralo si compartes el equipo.
 - `tools.allow_system: false` desactiva abrir aplicaciones y leer el estado del equipo.
 
