@@ -12,12 +12,16 @@ Se leen tres corrientes, y las tres son Owned Reads:
 - **menciones**: lo que te nombra a ti, que es lo que de verdad quieres oír
   en voz alta.
 - **propias**: tus publicaciones, para poder preguntar qué escribiste.
+- **marcadores**: lo que guardaste para leer luego.
 
 Cada una es una petición aparte y se cobra aparte, así que vienen apagadas
-menos el timeline. Los **marcadores**, que también son Owned Reads, se quedan
-fuera a propósito: la documentación y los foros no se ponen de acuerdo sobre
-si aceptan OAuth 1.0a, y hay informes de 403 pidiendo OAuth 2.0. Prefiero no
-añadir un camino que igual no funciona.
+menos el timeline.
+
+Los **marcadores** son la excepción a todo lo anterior: no admiten OAuth 1.0a
+y piden un token de usuario de OAuth 2.0 con el permiso `bookmark.read`. Eso
+obliga a un paseo por el navegador la primera vez —`scripts/x_autoriza.py`— y
+a guardar un refresh token que se renueva solo. Si no está configurado, la
+corriente se salta sin ruido y las demás siguen.
 
 Y una condición que se cobra cara si se incumple: el precio de Owned Read
 solo aplica cuando el usuario autenticado es el dueño de la app. Si pones en
@@ -31,10 +35,12 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import datetime, timezone
 
 from . import Item
 from .oauth1 import authorization_header
+from .oauth2 import MARGEN, Tokens, canjea, cuerpo_de_refresco
 from ..http import Client
 
 log = logging.getLogger("jarvis.sources.x")
@@ -51,11 +57,14 @@ CORRIENTES = {
     "menciones": {"ruta": "mentions", "kind": "mención", "params": {}},
     "propias": {"ruta": "tweets", "kind": "publicación propia",
                 "params": {"exclude": "retweets,replies"}},
+    "marcadores": {"ruta": "bookmarks", "kind": "marcador", "params": {}},
 }
+# Las que no se pueden firmar con OAuth 1.0a por mucho que uno quiera.
+CON_OAUTH2 = ("marcadores",)
 POR_DEFECTO = ("timeline",)
 # Entre corrientes, la más concreta manda: si algo aparece en el timeline y
 # además te menciona, es una mención.
-PRECEDENCIA = ("timeline", "propias", "menciones")
+PRECEDENCIA = ("timeline", "propias", "marcadores", "menciones")
 
 
 def corrientes_validas(pedidas) -> tuple[str, ...]:
@@ -110,7 +119,7 @@ class XSource:
     name = "x"
 
     def __init__(self, user_id: str = "", limit: int = 40,
-                 interval_minutes: int = 0, lee=POR_DEFECTO):
+                 interval_minutes: int = 0, lee=POR_DEFECTO, tokens=None):
         self.api_key = os.getenv("JARVIS_X_API_KEY", "")
         self.api_secret = os.getenv("JARVIS_X_API_SECRET", "")
         self.token = os.getenv("JARVIS_X_ACCESS_TOKEN", "")
@@ -124,11 +133,53 @@ class XSource:
         self.limit = max(5, min(100, limit))
         self.interval_minutes = interval_minutes
         self.lee = corrientes_validas(lee)
+        # Lo de OAuth 2.0, solo para los marcadores. Sin cliente ni refresh
+        # token, esa corriente se salta y las demás siguen igual.
+        self.client_id = os.getenv("JARVIS_X_CLIENT_ID", "")
+        self.tokens = Tokens(tokens) if tokens else None
+        self._acceso = ""
+        self._caduca = 0.0
 
-    def _get(self, client, url: str, params: dict) -> dict | None:
-        header = authorization_header(
-            "GET", url, self.api_key, self.api_secret,
-            self.token, self.token_secret, params=params)
+    @property
+    def oauth2_listo(self) -> bool:
+        return bool(self.client_id and self.tokens and self.tokens.lee())
+
+    def _token_de_acceso(self, client) -> str:
+        """El de ahora, renovándolo si toca. Guarda el refresh token primero.
+
+        X **rota** el refresh token: el canje devuelve uno nuevo y mata el
+        anterior. Si se pierde el nuevo hay que volver al navegador, así que se
+        guarda antes de usar el acceso que vino con él. Perder una vuelta de
+        lectura se arregla solo; perder el refresh token, no.
+        """
+        if self._acceso and time.time() < self._caduca:
+            return self._acceso
+        if not self.oauth2_listo:
+            return ""
+
+        datos = canjea(client, cuerpo_de_refresco(self.tokens.lee(),
+                                                  self.client_id))
+        if not datos:
+            log.error("no se ha podido renovar el token de X; vuelve a pasar "
+                      "por scripts/x_autoriza.py")
+            return ""
+        if (nuevo := datos.get("refresh_token")):
+            self.tokens.guarda(nuevo)
+
+        self._acceso = str(datos.get("access_token", ""))
+        self._caduca = time.time() + max(0, int(datos.get("expires_in", 0))) - MARGEN
+        return self._acceso
+
+    def _get(self, client, url: str, params: dict,
+             corriente: str = "timeline") -> dict | None:
+        if corriente in CON_OAUTH2:
+            if not (acceso := self._token_de_acceso(client)):
+                return None
+            header = f"Bearer {acceso}"
+        else:
+            header = authorization_header(
+                "GET", url, self.api_key, self.api_secret,
+                self.token, self.token_secret, params=params)
         response = client.get(url, params=params, headers={"Authorization": header})
         if response.status_code >= 400:
             log.error("error de la API de X (%s) en %s: %s",
@@ -155,6 +206,10 @@ class XSource:
                 return 0
 
             for corriente in self.lee:
+                if corriente in CON_OAUTH2 and not self.oauth2_listo:
+                    log.info("x: los marcadores piden OAuth 2.0; pasa por "
+                             "scripts/x_autoriza.py para activarlos")
+                    continue
                 payload = self._get(
                     client,
                     f"{API}/users/{user_id}/{CORRIENTES[corriente]['ruta']}",
@@ -165,6 +220,7 @@ class XSource:
                         "user.fields": "username,name",
                         **CORRIENTES[corriente]["params"],
                     },
+                    corriente,
                 )
                 if payload is None:
                     # Una corriente caída no se lleva por delante a las otras.

@@ -5,6 +5,8 @@ cada lectura se factura.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import sys
@@ -23,9 +25,14 @@ from jarvis.config import Config  # noqa: E402
 from jarvis.llm.tools import Toolbox  # noqa: E402
 from jarvis.sources import x_twitter as x_module  # noqa: E402
 from jarvis.sources.store import Store  # noqa: E402
+from jarvis.sources.oauth2 import (  # noqa: E402
+    PERMISOS, Tokens, cuerpo_de_canje, cuerpo_de_refresco, url_de_autorizacion,
+    verificador,
+)
+from jarvis.sources import oauth2 as oauth2_module  # noqa: E402
 from jarvis.sources.x_twitter import (  # noqa: E402
-    CORRIENTES, POR_DEFECTO, XSource, authors_by_id, corrientes_validas,
-    parse_post,
+    CON_OAUTH2, CORRIENTES, POR_DEFECTO, XSource, authors_by_id,
+    corrientes_validas, parse_post,
 )
 
 CREDENCIALES = {
@@ -123,6 +130,22 @@ class FakeX(BaseHTTPRequestHandler):
     por_ruta: dict = {}
     #: Rutas que contestan con error, para probar una corriente caída.
     rotas: tuple = ()
+    #: Lo que devuelve el endpoint de tokens, y lo que se le pidió.
+    tokens: dict = {"access_token": "acceso-1", "refresh_token": "refresco-2",
+                    "expires_in": 7200}
+    canjes: list = []
+    token_status = 200
+
+    def do_POST(self):  # noqa: N802
+        largo = int(self.headers.get("Content-Length", 0))
+        cuerpo = self.rfile.read(largo).decode()
+        FakeX.canjes.append({k: v[0] for k, v in parse_qs(cuerpo).items()})
+        datos = json.dumps(FakeX.tokens).encode()
+        self.send_response(FakeX.token_status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(datos)))
+        self.end_headers()
+        self.wfile.write(datos)
 
     def log_message(self, *args):
         pass
@@ -158,6 +181,10 @@ class CasoConApiFalsa(unittest.TestCase):
         FakeX.status = 200
         FakeX.por_ruta = {}
         FakeX.rotas = ()
+        FakeX.canjes = []
+        FakeX.token_status = 200
+        FakeX.tokens = {"access_token": "acceso-1",
+                        "refresh_token": "refresco-2", "expires_in": 7200}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), FakeX)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         base = f"http://127.0.0.1:{self.server.server_address[1]}/2"
@@ -240,7 +267,7 @@ class TestCorrientes(unittest.TestCase):
 
     def test_las_que_hay(self):
         self.assertEqual(set(CORRIENTES),
-                         {"timeline", "menciones", "propias"})
+                         {"timeline", "menciones", "propias", "marcadores"})
 
     def test_se_ordenan_por_precedencia(self):
         """De menos a más concreta, que es como se pisan luego."""
@@ -252,23 +279,24 @@ class TestCorrientes(unittest.TestCase):
                          ("propias", "menciones"))
 
     def test_lo_que_no_existe_se_ignora(self):
-        self.assertEqual(corrientes_validas(["marcadores", "propias"]),
+        self.assertEqual(corrientes_validas(["me_gusta", "propias"]),
                          ("propias",))
 
     def test_si_no_queda_nada_valido_el_timeline(self):
-        self.assertEqual(corrientes_validas(["marcadores"]), ("timeline",))
+        self.assertEqual(corrientes_validas(["me_gusta"]), ("timeline",))
 
     def test_cada_corriente_marca_el_tipo(self):
         for corriente, esperado in (("timeline", "publicación"),
                                     ("menciones", "mención"),
-                                    ("propias", "publicación propia")):
+                                    ("propias", "publicación propia"),
+                                    ("marcadores", "marcador")):
             with self.subTest(corriente=corriente):
                 item = parse_post(tweet(), AUTORES, corriente)
                 self.assertEqual(item.kind, esperado)
                 self.assertEqual(item.meta["corriente"], corriente)
 
     def test_una_corriente_rara_no_revienta(self):
-        self.assertEqual(parse_post(tweet(), AUTORES, "marcadores").kind,
+        self.assertEqual(parse_post(tweet(), AUTORES, "me_gusta").kind,
                          "publicación")
 
 
@@ -349,6 +377,186 @@ class TestFiltroPorTipo(unittest.TestCase):
 
     def test_un_tipo_que_no_hay(self):
         self.assertEqual(self.store.recent(source="x", kind="marcador"), [])
+
+
+class TestPKCE(unittest.TestCase):
+    """La parte de OAuth 2.0 que es pura cuenta: se comprueba sin red."""
+
+    def test_el_reto_es_el_sha256_del_verificador(self):
+        verifier, challenge = verificador()
+        esperado = base64.urlsafe_b64encode(
+            hashlib.sha256(verifier.encode("ascii")).digest()).decode().rstrip("=")
+        self.assertEqual(challenge, esperado)
+
+    def test_sin_relleno_y_seguro_para_urls(self):
+        verifier, challenge = verificador()
+        for trozo in (verifier, challenge):
+            self.assertNotIn("=", trozo)
+            self.assertNotIn("+", trozo)
+            self.assertNotIn("/", trozo)
+
+    def test_cada_vez_uno_distinto(self):
+        self.assertNotEqual(verificador()[0], verificador()[0])
+
+    def test_el_verificador_tiene_longitud_de_sobra(self):
+        """RFC 7636: entre 43 y 128 caracteres."""
+        verifier, _ = verificador()
+        self.assertTrue(43 <= len(verifier) <= 128, len(verifier))
+
+    def test_la_url_lleva_lo_que_x_pide(self):
+        url = url_de_autorizacion("mi-id", "http://127.0.0.1:8723/x", "reto",
+                                  "estado")
+        params = parse_qs(urlsplit(url).query)
+        self.assertEqual(params["response_type"], ["code"])
+        self.assertEqual(params["code_challenge_method"], ["S256"])
+        self.assertEqual(params["code_challenge"], ["reto"])
+        self.assertEqual(params["client_id"], ["mi-id"])
+        self.assertEqual(params["state"], ["estado"])
+
+    def test_pide_permiso_para_marcadores_y_para_refrescar(self):
+        """Sin `offline.access` no hay refresh token, y a las dos horas fuera."""
+        self.assertIn("bookmark.read", PERMISOS)
+        self.assertIn("offline.access", PERMISOS)
+        params = parse_qs(urlsplit(url_de_autorizacion(
+            "id", "uri", "reto", "estado")).query)
+        self.assertEqual(params["scope"][0].split(), list(PERMISOS))
+
+    def test_los_cuerpos_del_canje(self):
+        canje = cuerpo_de_canje("codigo", "id", "uri", "verificador")
+        self.assertEqual(canje["grant_type"], "authorization_code")
+        self.assertEqual(canje["code_verifier"], "verificador")
+
+        refresco = cuerpo_de_refresco("refresco", "id")
+        self.assertEqual(refresco["grant_type"], "refresh_token")
+        self.assertNotIn("code_verifier", refresco)
+
+
+class TestGuardaTokens(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.fichero = Path(self.tmp.name) / "x_oauth2.json"
+        self.tokens = Tokens(self.fichero)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_ida_y_vuelta(self):
+        self.tokens.guarda("refresco-1")
+        self.assertEqual(Tokens(self.fichero).lee(), "refresco-1")
+
+    def test_sin_fichero_no_hay_nada(self):
+        self.assertEqual(self.tokens.lee(), "")
+
+    def test_un_fichero_roto_no_revienta(self):
+        self.fichero.write_text("{ no es json", encoding="utf-8")
+        self.assertEqual(self.tokens.lee(), "")
+
+    def test_solo_lo_lee_su_dueño(self):
+        """Es una credencial: no tiene por qué verla el resto del sistema."""
+        self.tokens.guarda("refresco-1")
+        self.assertEqual(self.fichero.stat().st_mode & 0o077, 0)
+
+    def test_no_guarda_el_de_acceso(self):
+        """Dura dos horas: tenerlo en disco solo sería una credencial más."""
+        self.tokens.guarda("refresco-1")
+        self.assertNotIn("access", self.fichero.read_text(encoding="utf-8"))
+
+
+class TestMarcadores(CasoConApiFalsa):
+    def setUp(self):
+        super().setUp()
+        self.fichero = Path(self.tmp.name) / "x_oauth2.json"
+        Tokens(self.fichero).guarda("refresco-1")
+        self.patch_token = mock.patch.object(
+            oauth2_module, "TOKEN",
+            f"http://127.0.0.1:{self.server.server_address[1]}/2/oauth2/token")
+        self.patch_token.start()
+
+    def tearDown(self):
+        self.patch_token.stop()
+        super().tearDown()
+
+    def fuente(self, **kwargs):
+        kwargs.setdefault("tokens", self.fichero)
+        with mock.patch.dict(os.environ,
+                             {**CREDENCIALES, "JARVIS_X_CLIENT_ID": "mi-id"}):
+            return XSource(**kwargs)
+
+    def test_los_marcadores_van_por_oauth2(self):
+        self.assertEqual(CON_OAUTH2, ("marcadores",))
+        self.fuente(user_id="7", lee=["marcadores"]).sync(self.store)
+
+        peticion = next(p for p in FakeX.peticiones
+                        if p["ruta"].endswith("/bookmarks"))
+        self.assertEqual(peticion["auth"], "Bearer acceso-1")
+
+    def test_el_resto_sigue_firmado_con_oauth1(self):
+        """Dos autenticaciones a la vez, cada una donde le toca."""
+        self.fuente(user_id="7", lee=["timeline", "marcadores"]).sync(self.store)
+        por_ruta = {p["ruta"].rsplit("/", 1)[-1]: p["auth"]
+                    for p in FakeX.peticiones}
+        self.assertTrue(por_ruta["reverse_chronological"].startswith("OAuth "))
+        self.assertEqual(por_ruta["bookmarks"], "Bearer acceso-1")
+
+    def test_el_refresh_token_nuevo_se_guarda(self):
+        """X rota: el que acaba de llegar mata al anterior."""
+        self.fuente(user_id="7", lee=["marcadores"]).sync(self.store)
+        self.assertEqual(Tokens(self.fichero).lee(), "refresco-2")
+
+    def test_y_se_guarda_antes_de_usarlo(self):
+        """Si se pierde, hay que volver al navegador; la lectura no."""
+        FakeX.rotas = ("bookmarks",)
+        self.fuente(user_id="7", lee=["marcadores"]).sync(self.store)
+        self.assertEqual(Tokens(self.fichero).lee(), "refresco-2",
+                         "la lectura falló, pero el token está a salvo")
+
+    def test_el_canje_manda_lo_que_x_pide(self):
+        self.fuente(user_id="7", lee=["marcadores"]).sync(self.store)
+        canje, = FakeX.canjes
+        self.assertEqual(canje["grant_type"], "refresh_token")
+        self.assertEqual(canje["refresh_token"], "refresco-1")
+        self.assertEqual(canje["client_id"], "mi-id")
+
+    def test_el_token_se_reutiliza_mientras_dure(self):
+        """Dos horas dura: renovarlo en cada vuelta es una llamada de más."""
+        fuente = self.fuente(user_id="7", lee=["marcadores"])
+        fuente.sync(self.store)
+        fuente.sync(self.store)
+        self.assertEqual(len(FakeX.canjes), 1)
+
+    def test_si_el_canje_falla_no_se_lee_ni_se_pierde_el_token(self):
+        FakeX.token_status = 400
+        FakeX.tokens = {"error": "invalid_grant"}
+        with self.assertLogs("jarvis.sources", level="ERROR"):
+            self.fuente(user_id="7", lee=["marcadores"]).sync(self.store)
+
+        self.assertFalse(any(p["ruta"].endswith("/bookmarks")
+                             for p in FakeX.peticiones))
+        self.assertEqual(Tokens(self.fichero).lee(), "refresco-1")
+
+    def test_sin_autorizar_se_salta_y_las_otras_siguen(self):
+        """Quien no haya pasado por el navegador no se queda sin timeline."""
+        vacio = Path(self.tmp.name) / "no-hay.json"
+        with mock.patch.dict(os.environ, {**CREDENCIALES,
+                                          "JARVIS_X_CLIENT_ID": "mi-id"}):
+            fuente = XSource(user_id="7", lee=["timeline", "marcadores"],
+                             tokens=vacio)
+        self.assertEqual(fuente.sync(self.store), 1)
+        self.assertFalse(any(p["ruta"].endswith("/bookmarks")
+                             for p in FakeX.peticiones))
+
+    def test_sin_client_id_tampoco(self):
+        with mock.patch.dict(os.environ, {**CREDENCIALES,
+                                          "JARVIS_X_CLIENT_ID": ""}):
+            fuente = XSource(user_id="7", lee=["marcadores"],
+                             tokens=self.fichero)
+        self.assertFalse(fuente.oauth2_listo)
+        self.assertEqual(fuente.sync(self.store), 0)
+        self.assertEqual(FakeX.canjes, [])
+
+    def test_un_marcador_se_marca_como_tal(self):
+        self.fuente(user_id="7", lee=["marcadores"]).sync(self.store)
+        self.assertEqual(self.store.recent(source="x")[0]["kind"], "marcador")
 
 
 class TestHerramientaDeMenciones(unittest.IsolatedAsyncioTestCase):

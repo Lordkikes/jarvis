@@ -128,9 +128,14 @@ sources:
                            # aplica si el usuario autenticado es el dueño de la app
     limit: 40              # publicaciones por sincronización (5-100)
     interval_minutes: 60   # más espaciado que el resto: cuesta dinero
-    lee: [timeline]        # qué leer de lo tuyo; también «menciones» y «propias».
-                           # Cada corriente es una petición aparte y se cobra
-                           # aparte: con las tres, el gasto se multiplica por tres
+    lee: [timeline]        # qué leer de lo tuyo; también «menciones», «propias»
+                           # y «marcadores». Cada corriente es una petición
+                           # aparte y se cobra aparte: con las cuatro, el gasto
+                           # se multiplica por cuatro
+    tokens_file: data/x_oauth2.json   # solo para los marcadores: son los únicos
+                           # que no admiten OAuth 1.0a y piden un token de
+                           # usuario de OAuth 2.0. Se saca una vez con
+                           # `python scripts/x_autoriza.py` y se renueva solo
 
   calendar:
     enabled: false         # CalDAV con contraseña, o URLs .ics sueltas

@@ -321,10 +321,11 @@ Reads:
 | `timeline` | Tu línea temporal cronológica | «¿qué se cuenta?» |
 | `menciones` | Lo que te nombra a ti | «¿me han mencionado?» |
 | `propias` | Lo que has publicado tú | «¿qué escribí ayer?» |
+| `marcadores` | Lo que guardaste para leer luego | «¿qué me guardé?» |
 
 **Cada corriente es una petición aparte y se cobra aparte**, así que solo
 viene encendido el timeline: quien no toque nada no empieza a gastar el
-triple. Las menciones llevan su propia herramienta —`menciones_recientes`—
+cuádruple. Las menciones llevan su propia herramienta —`menciones_recientes`—
 porque «¿me han mencionado?» y «¿qué se cuenta?» son dos preguntas distintas.
 
 ```yaml
@@ -344,10 +345,38 @@ sources:
 Lo mismo que aparece en dos corrientes se indexa **una vez**, y manda la más
 concreta: si algo pasa por tu timeline y además te nombra, es una mención.
 
-**Los marcadores se quedan fuera** aunque también sean Owned Reads. La
-documentación y los foros no se ponen de acuerdo sobre si aceptan OAuth 1.0a
-—hay informes de 403 pidiendo OAuth 2.0—, y prefiero no añadir un camino que
-igual no funciona. Si lo confirmas, es una entrada más en la tabla.
+#### Los marcadores piden otra autenticación
+
+Todo lo demás de X se firma con OAuth 1.0a: cuatro credenciales que se sacan
+de una vez del portal y no caducan. **Los marcadores no admiten eso.** Piden
+un token de usuario de OAuth 2.0 con el permiso `bookmark.read`, y eso obliga
+a un paseo por el navegador. Se hace **una vez**:
+
+1. En el portal de desarrolladores, en tu app: activa OAuth 2.0, tipo
+   **cliente público** (native/SPA), y añade `http://127.0.0.1:8723/x` a las
+   URL de redirección.
+2. Copia el *Client ID* de OAuth 2.0 a `.env` como `JARVIS_X_CLIENT_ID`. No
+   sustituye a las cuatro de OAuth 1.0a: aquellas siguen haciendo falta.
+3. `python scripts/x_autoriza.py`, que abre el navegador y guarda lo que
+   hace falta en `data/x_oauth2.json`.
+4. Añade `marcadores` a `sources.x.lee`.
+
+A partir de ahí Jarvis se apaña solo: el token de acceso dura dos horas y se
+renueva cuando toca.
+
+> **La rotación es la parte delicada.** Cada renovación devuelve un refresh
+> token nuevo y mata el anterior; si se pierde el nuevo, hay que volver al
+> navegador. Por eso se guarda **antes** de usar el acceso que vino con él:
+> perder una vuelta de lectura se arregla solo, perder el token no. Hay una
+> prueba que corta la lectura a propósito y comprueba que el token quedó a
+> salvo.
+
+> La cuenta de OAuth 2.0 tiene que ser **la misma** que la de OAuth 1.0a: los
+> marcadores se piden con tu id de usuario, y si los tokens son de otra
+> cuenta, X responde 403.
+
+Si esto no está configurado, la corriente se salta sin ruido y las demás
+siguen leyéndose. No hace falta tocar nada para seguir como estabas.
 
 ```bash
 # Portal de desarrolladores → tu app → Keys and tokens. Las cuatro, con
@@ -356,6 +385,10 @@ JARVIS_X_API_KEY=
 JARVIS_X_API_SECRET=
 JARVIS_X_ACCESS_TOKEN=
 JARVIS_X_ACCESS_SECRET=
+
+# Solo si quieres los marcadores: el Client ID de OAuth 2.0 de la misma
+# app. Ver «Los marcadores piden otra autenticación».
+JARVIS_X_CLIENT_ID=
 ```
 
 > Si dejas `user_id` vacío, Jarvis pregunta a la API quién eres en el primer
@@ -1090,8 +1123,9 @@ jarvis/
 │   │   ├── bluesky.py      # línea temporal de Bluesky
 │   │   ├── mastodon.py     # línea temporal de Mastodon
 │   │   ├── reddit.py       # portada o subreddits elegidos
-│   │   ├── x_twitter.py    # X: timeline, menciones y lo tuyo (de pago)
+│   │   ├── x_twitter.py    # X: timeline, menciones, tuyas y marcadores
 │   │   ├── oauth1.py       # firma OAuth 1.0a, que es lo que X acepta
+│   │   ├── oauth2.py       # ★ PKCE y rotación, solo para los marcadores
 │   │   ├── rss.py          # feeds RSS 2.0, RSS 1.0 y Atom
 │   │   ├── calendar_dav.py # calendario por CalDAV o por .ics
 │   │   ├── ical.py         # ★ lector y escritor de iCalendar (RFC 5545)
