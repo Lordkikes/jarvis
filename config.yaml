@@ -163,6 +163,13 @@ tools:
   alarms_file: data/alarms.json
   routines_file: data/routines.json
 
+  presencia:
+    # Para las rutinas de salir y de llegar. Se nombran las entidades a mano y
+    # no se abre el dominio «person» entero: eso sería decirle a Jarvis dónde
+    # está todo el mundo, y además cuenta el móvil del que vino de visita.
+    # La casa está vacía solo cuando lo están todas.
+    entidades: []          # p. ej. [person.yelko]
+
   # Para la música del propio equipo (Spotify, VLC, el navegador…) hace falta
   # `playerctl`, que está en los repositorios de cualquier distribución. Si no
   # está instalado, Jarvis solo maneja los altavoces de Home Assistant.

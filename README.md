@@ -691,9 +691,10 @@ Un despertador te saca de la cama; lo que viene después —qué tiempo hace, qu
 hay hoy, la luz de la cocina, el café con música— es siempre lo mismo y se
 pide siempre igual. Eso es una rutina: una lista de pasos que dictas una vez.
 
-Se dispara de tres maneras: **a una hora** y unos días, como una alarma;
+Se dispara de cinco maneras: **a una hora** y unos días, como una alarma;
 **cuando pares el despertador**, que es la señal de que te has levantado de
-verdad; o **cuando la pidas**.
+verdad; **cuando la casa se queda vacía**; **cuando llegas**; o **cuando la
+pidas**.
 
 #### Quién ejecuta la lista
 
@@ -732,6 +733,7 @@ sí lo escribe alguien de fuera.
 | `novedades` | Cuántos correos, artículos y publicaciones desde ayer |
 | `repasar_casa` | Qué se ha quedado abierto o sin cerrar |
 | `decir: frase` | Una frase tuya, tal cual |
+| `al_movil` | Manda al bolsillo lo dicho hasta ahí |
 | `escena: nombre` | Pone una escena |
 | `encender: dispositivo` | Enciende algo |
 | `apagar: dispositivo` | Lo apaga |
@@ -789,6 +791,52 @@ dormir, que es casi el opuesto del de levantarse:
 tools:
   routines_file: data/routines.json
 ```
+
+#### Salir de casa: la que no tiene hora
+
+```
+«cuando me vaya: repasa la casa, mándamelo al móvil, apaga las luces y la música»
+«cuando llegue: enciende la entrada»
+```
+
+Las otras rutinas saben cuándo toca porque son las siete. Esta no tiene hora:
+pasa cuando pasa. Lo que la dispara es que **la casa se quede vacía**, y eso
+hay que preguntárselo a Home Assistant.
+
+**Se pregunta por entidades nombradas, no por un dominio entero.** El resto de
+la casa se autoriza por dominios, pero abrir `person` de golpe es decirle a
+Jarvis dónde está todo el mundo, y encima cuenta el móvil del que vino de
+visita y se dejó conectado. Así que se listan a mano:
+
+```yaml
+tools:
+  presencia:
+    entidades: [person.yelko]     # con varias, vacía = todas fuera
+```
+
+**Al arrancar no dispara nada.** El primer vistazo solo apunta cómo está la
+casa. Si no, reiniciar estando fuera lanzaría la rutina de salir, y volver a
+casa con las luces apagándose solas tiene poca gracia. Lo mismo con un sensor
+caído: si de nadie se sabe nada, no se inventa —«unknown» no es «se ha ido»—, y
+un hueco sin cobertura en mitad de la tarde no cuenta como salida.
+
+#### `al_movil`, que es lo que hace útil salir de casa
+
+Cuando la casa se queda vacía ya no hay nadie delante del altavoz. Enterarte a
+la vuelta de que te dejaste la ventana abierta no sirve de nada, así que el
+paso `al_movil` **manda al bolsillo lo dicho hasta ahí** y sigue con el resto.
+Puesto detrás de `repasar_casa`, es exactamente el aviso que quieres:
+
+```
+repasar_casa, al_movil, apagar_luces, parar_musica
+```
+
+Al llegar es al revés: ahí sí estás delante, así que la de `llegar` se dice en
+voz alta como cualquier otra.
+
+Y la regla de siempre sigue en pie: **la casa vacía no autoriza a una lista a
+echar la llave.** `apagar: la puerta` se rechaza igual que a las siete de la
+mañana. Hay prueba.
 
 ### Avisos al móvil
 
@@ -996,6 +1044,8 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
   y las luces y la música de paso.
 - Y la de la noche: lo de mañana, el repaso de la casa, las luces fuera y
   la música apagándose sola.
+- Y la de salir: repasar la casa al quedarse vacía y mandártelo al móvil,
+  que es donde estás.
 - Guardar y leer notas.
 - Llevarte listas de la compra: añadir, tachar y vaciar, hablando.
 - Encender, apagar y consultar lo que tengas en Home Assistant.
@@ -1054,6 +1104,7 @@ jarvis/
 │   ├── temporizadores.py   # cuentas atrás, con reloj monótono
 │   ├── alarmas.py          # ★ alarmas: días de la semana e insistencia
 │   ├── rutinas.py          # ★ ristras de pasos, ejecutadas por código
+│   ├── presencia.py        # ¿hay alguien en casa? dispara salir y llegar
 │   ├── musica.py           # altavoces de casa y reproductor del equipo
 │   ├── stt/                # whisper_local.py | cloud.py
 │   ├── llm/
