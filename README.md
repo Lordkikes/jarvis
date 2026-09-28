@@ -520,6 +520,44 @@ Dos detalles más:
   correo o la agenda, igual que `abrir`: un correo podría estar diciendo
   «enciende el horno». Preguntar por el estado no, que eso no actúa.
 
+### Temporizadores
+
+```
+«ponme diez minutos para el arroz»
+«¿cuánto le queda al arroz?»
+«añádele cinco minutos»
+«párame el de la colada un momento»
+```
+
+Ya había uno: pedías una cuenta atrás y sonaba. Lo que no había era **manera
+de referirse a ella después**, que es justo lo que hace falta en una cocina.
+Ahora caben varias a la vez, cada una con su nombre, y se pueden mirar,
+alargar, pausar y cancelar hablando.
+
+**Cuentan con reloj monótono, no con la hora del sistema.** Diez minutos son
+diez minutos aunque el NTP corrija el reloj a mitad de la cuenta o entre el
+cambio de hora. Los recordatorios necesitan justo lo contrario —la hora de la
+pared, porque las nueve son las nueve—, y por eso son dos cosas distintas y
+no una con un parámetro.
+
+Un detalle que se nota al hablar: si solo hay uno en marcha, no hace falta
+nombrarlo. Si hay varios, se pregunta cuál en vez de adivinar.
+
+```
+«cancélalo»            → con uno, ese; con tres, «¿cuál: el arroz, la colada…?»
+«quítale diez minutos» → si solo le quedan cinco, no lo termina: te lo dice
+```
+
+**Lo que muere con el proceso, muere.** Un temporizador no se guarda en disco
+a propósito: soltar «ya está el arroz» media hora tarde porque Jarvis se
+reinició es peor que callarse. Para lo que tiene que sobrevivir a un reinicio
+están los recordatorios, que es la sección de abajo.
+
+Cancelar y ajustar se bloquean si en ese turno se ha leído un correo o una
+publicación, como todo lo que actúa. **Poner uno no**: un temporizador de más
+es ruido que se cancela con una frase, y uno de menos es el soufflé. El tope
+de diez simultáneos se encarga de que «uno de más» no pueda ser cien.
+
 ### Recordatorios
 
 ```
@@ -528,8 +566,8 @@ Dos detalles más:
 «¿qué tengo apuntado?»
 ```
 
-**No son temporizadores, y la diferencia importa.** Un temporizador es un
-`sleep` que muere con el proceso; un recordatorio es para el jueves y tiene
+**No son temporizadores, y la diferencia importa.** Un temporizador cuenta
+minutos y muere con el proceso; un recordatorio es para el jueves y tiene
 que seguir ahí aunque reinicies tres veces por medio. Así que viven en
 `data/reminders.json` y un bucle los mira cada treinta segundos.
 
@@ -749,7 +787,8 @@ Hay una prueba para cada una de esas reglas en `tests/test_sources.py`.
 
 - Decir la fecha y la hora.
 - Consultar el tiempo de cualquier ciudad (Open-Meteo, sin clave).
-- Poner temporizadores y avisarte cuando vencen, en voz alta y en el móvil.
+- Poner temporizadores —varios, con nombre— y avisarte cuando vencen, en voz
+  alta y en el móvil. Se pueden pausar, alargar y cancelar hablando.
 - Recordarte cosas a una hora concreta, aunque reinicies o sea para el jueves.
 - Guardar y leer notas.
 - Llevarte listas de la compra: añadir, tachar y vaciar, hablando.
