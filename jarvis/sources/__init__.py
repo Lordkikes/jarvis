@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from ..config import data_path
+
 log = logging.getLogger("jarvis.sources")
 
 _TAG = re.compile(r"<[^>]+>")
@@ -117,6 +119,8 @@ def make_sources(cfg) -> list:
                 limit=int(cfg.get("sources.x.limit", 40)),
                 interval_minutes=int(cfg.get("sources.x.interval_minutes", 0)),
                 lee=cfg.get("sources.x.lee", None),
+                tokens=data_path(cfg.get("sources.x.tokens_file",
+                                         "data/x_oauth2.json")),
             ))
         except Exception as exc:  # noqa: BLE001
             log.warning("fuente 'x' no disponible (%s)", exc)
