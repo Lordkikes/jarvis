@@ -189,12 +189,17 @@ class Store:
             params.append(limit)
             return [dict(row) for row in self._conn.execute(sql, params).fetchall()]
 
-    def recent(self, source: str | None = None, limit: int = 8) -> list[dict]:
-        sql = "SELECT * FROM items"
+    def recent(self, source: str | None = None, limit: int = 8,
+               kind: str | None = None) -> list[dict]:
+        """Lo último. `kind` separa dentro de una fuente: en X, las menciones."""
+        sql = "SELECT * FROM items WHERE 1=1"
         params: list = []
         if source:
-            sql += " WHERE source = ?"
+            sql += " AND source = ?"
             params.append(source)
+        if kind:
+            sql += " AND kind = ?"
+            params.append(kind)
         sql += " ORDER BY created_at DESC LIMIT ?"
         params.append(limit)
         with self._lock:

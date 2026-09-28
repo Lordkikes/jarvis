@@ -122,10 +122,15 @@ sources:
   x:
     enabled: false         # ÚNICA fuente de pago: 0,001 $ por publicación leída,
                            # con deduplicación por día UTC (releerla hoy no cuesta)
-    user_id: ""            # tu id numérico; si lo dejas vacío Jarvis lo pregunta
-                           # una vez por ciclo, y esa consulta también se cobra
+    user_id: ""            # TU id numérico; si lo dejas vacío Jarvis lo pregunta
+                           # una vez por ciclo, y esa consulta también se cobra.
+                           # Tiene que ser el tuyo: la tarifa de Owned Read solo
+                           # aplica si el usuario autenticado es el dueño de la app
     limit: 40              # publicaciones por sincronización (5-100)
     interval_minutes: 60   # más espaciado que el resto: cuesta dinero
+    lee: [timeline]        # qué leer de lo tuyo; también «menciones» y «propias».
+                           # Cada corriente es una petición aparte y se cobra
+                           # aparte: con las tres, el gasto se multiplica por tres
 
   calendar:
     enabled: false         # CalDAV con contraseña, o URLs .ics sueltas
