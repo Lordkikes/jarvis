@@ -33,6 +33,9 @@ from ..musica import (
     busca as busca_reproductor, busca_favorito, desde_home_assistant,
     elige, en_palabras as suena_en_palabras,
 )
+from ..temporizadores import (
+    Temporizadores, al, describe, en_palabras as duracion, nombre,
+)
 from ..sources import ical
 from ..http import AsyncClient
 
@@ -69,6 +72,12 @@ def _y(cosas: list[str]) -> str:
     if len(cosas) <= 1:
         return "".join(cosas)
     return f"{', '.join(cosas[:-1])} y {cosas[-1]}"
+
+
+def _quedan(segundos: float) -> str:
+    """«quedan 3 minutos», pero «queda 1 minuto»."""
+    dicho = duracion(segundos)
+    return f"queda {dicho}" if dicho.startswith("1 ") else f"quedan {dicho}"
 
 
 def _sin_tildes(texto: str) -> str:
@@ -120,8 +129,11 @@ class Toolbox:
         },
         {
             "name": "poner_temporizador",
-            "description": "Programa un aviso dentro de N segundos. Jarvis avisará "
-                           "en voz alta cuando termine.",
+            "description": (
+                "Cuenta atrás: avisa en voz alta al terminar. Para «dentro de "
+                "N minutos». Puede haber varios a la vez, así que ponle "
+                "etiqueta con lo que sea («el arroz», «la colada») para poder "
+                "distinguirlos luego."),
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -129,6 +141,55 @@ class Toolbox:
                     "etiqueta": {"type": "string", "description": "Para qué es el aviso"},
                 },
                 "required": ["segundos"],
+            },
+        },
+        {
+            "name": "ver_temporizadores",
+            "description": "Qué cuentas atrás hay en marcha y cuánto les queda.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "cual": {"type": "string",
+                             "description": "Opcional: la etiqueta, si pregunta "
+                                            "solo por uno"},
+                },
+            },
+        },
+        {
+            "name": "cancelar_temporizador",
+            "description": (
+                "Para una cuenta atrás antes de que termine. Si hay varias y "
+                "no dice cuál, pregúntaselo en vez de adivinar."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "cual": {"type": "string",
+                             "description": "La etiqueta del temporizador"},
+                    "todos": {"type": "boolean", "default": False,
+                              "description": "Solo si pide parar todos"},
+                    "confirmar": {"type": "boolean", "default": False,
+                                  "description": "True únicamente después de "
+                                                 "que le hayas leído la "
+                                                 "propuesta y haya dicho que sí"},
+                },
+            },
+        },
+        {
+            "name": "ajustar_temporizador",
+            "description": (
+                "Pausa, reanuda o cambia el tiempo de una cuenta atrás en "
+                "marcha. «Añádele cinco minutos», «páralo un momento»."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "accion": {"type": "string",
+                               "enum": ["pausar", "reanudar", "anadir", "quitar"]},
+                    "cual": {"type": "string",
+                             "description": "La etiqueta del temporizador"},
+                    "segundos": {"type": "integer", "minimum": 1, "maximum": 86400,
+                                 "description": "Cuánto añadir o quitar"},
+                },
+                "required": ["accion"],
             },
         },
         {
@@ -626,7 +687,9 @@ class Toolbox:
             data_path(cfg.get("tools.reminders_file", "data/reminders.json")))
         # Emisoras y listas con nombre propio: lo que resuelve «pon Radio 3».
         self.favoritos = dict(cfg.get("tools.musica.favoritos", {}) or {})
+        self.temporizadores = Temporizadores()
         self._timers: set[asyncio.Task] = set()
+        self._reloj: asyncio.Task | None = None
 
     # -- contenido externo -------------------------------------------------
     def begin_turn(self) -> None:
@@ -723,26 +786,186 @@ class Toolbox:
         )
 
     def _tool_poner_temporizador(self, args: dict) -> str:
-        seconds = int(args["segundos"])
-        label = args.get("etiqueta") or "el temporizador"
+        try:
+            segundos = int(args["segundos"])
+        except (KeyError, TypeError, ValueError):
+            return "¿De cuánto tiempo lo pongo?"
+        etiqueta = (args.get("etiqueta") or "").strip()
 
-        async def fire() -> None:
-            await asyncio.sleep(seconds)
-            message = f"Ha terminado {label}."
-            self.bus.emit("timer", message=message)
-            if self.on_announce is not None:
-                await self.on_announce(message)
-            if self.avisar_temporizadores and self.avisos.disponible:
-                # Fuera de casa, el altavoz no vale: que suene el bolsillo.
-                await asyncio.to_thread(self.avisos.envia, message,
-                                        "Temporizador")
+        resultado = self.temporizadores.pon(segundos, etiqueta)
+        if not resultado.get("ok"):
+            return f"No he podido: {resultado.get('motivo', '?')}."
 
-        task = asyncio.create_task(fire())
-        self._timers.add(task)
-        task.add_done_callback(self._timers.discard)
-        minutes = seconds / 60
-        cuando = f"{seconds} segundos" if seconds < 90 else f"{minutes:.0f} minutos"
-        return f"Temporizador de {cuando} programado para {label}."
+        self._arranca_reloj()
+        cuanto = duracion(segundos)
+        dicho = (f"Temporizador de {cuanto} programado para {etiqueta}."
+                 if etiqueta else f"Temporizador de {cuanto} programado.")
+        # Los temas pintan `message`: todo evento «timer» tiene que traerlo.
+        self.bus.emit("timer", message=dicho, etiqueta=etiqueta,
+                      segundos=segundos)
+        return dicho
+
+    def _tool_ver_temporizadores(self, args: dict) -> str:
+        if cual := (args.get("cual") or "").strip():
+            temporizador, aclaracion = self._resuelve_temporizador(cual)
+            if temporizador is None:
+                return aclaracion
+            if temporizador["pausado"]:
+                return (f"{nombre(temporizador)} está en pausa, con "
+                        f"{duracion(temporizador['restante'])} sin gastar.")
+            dicho = al(nombre(temporizador))
+            return (f"{dicho[0].upper()}{dicho[1:]} le "
+                    f"{_quedan(temporizador['restante'])}.")
+
+        if not (activos := self.temporizadores.lista()):
+            return "No tienes ningún temporizador en marcha."
+        if len(activos) == 1:
+            return f"Solo uno: {describe(activos[0])}."
+        return f"Tienes {len(activos)}: " + _y([describe(t) for t in activos]) + "."
+
+    def _tool_cancelar_temporizador(self, args: dict) -> str:
+        if self.external_content_seen:
+            # Cancelar es actuar, y lo leído podría estar dictándolo.
+            return ("No cancelo nada: en este turno he leído contenido de "
+                    "fuera. Pídemelo otra vez en una frase aparte.")
+
+        if not (activos := self.temporizadores.lista()):
+            return "No tienes ningún temporizador en marcha."
+
+        if args.get("todos") and len(activos) > 1:
+            # Uno se vuelve a poner con la misma frase que lo pidió; todos, no.
+            propuesta = {"accion": "cancelar_temporizadores",
+                         "ids": sorted(t["id"] for t in activos)}
+            lectura = ("cancelar los " + str(len(activos)) + " temporizadores: "
+                       + _y([describe(t) for t in activos]))
+            if (pendiente := self._confirmacion(propuesta,
+                                                bool(args.get("confirmar")),
+                                                lectura, "cancelar")) is not None:
+                return pendiente
+            cancelados = self.temporizadores.cancela_todos()
+            dicho = f"Cancelados los {len(cancelados)}."
+            self.bus.emit("timer", message=dicho, cancelados=len(cancelados))
+            return dicho
+
+        temporizador, aclaracion = self._resuelve_temporizador(
+            args.get("cual") or "")
+        if temporizador is None:
+            return aclaracion
+
+        self.temporizadores.cancela(temporizador["id"])
+        dicho = (f"Cancelo {nombre(temporizador)}: tenía "
+                 f"{duracion(temporizador['restante'])} por delante.")
+        self.bus.emit("timer", message=dicho, cancelados=1,
+                      etiqueta=temporizador["etiqueta"])
+        return dicho
+
+    def _tool_ajustar_temporizador(self, args: dict) -> str:
+        if self.external_content_seen:
+            return ("No toco los temporizadores: en este turno he leído "
+                    "contenido de fuera. Pídemelo otra vez en una frase aparte.")
+
+        accion = _sin_tildes(args.get("accion") or "").strip()
+        if accion not in ("pausar", "reanudar", "anadir", "quitar"):
+            return "No sé hacer eso con un temporizador."
+
+        temporizador, aclaracion = self._resuelve_temporizador(
+            args.get("cual") or "")
+        if temporizador is None:
+            return aclaracion
+
+        if accion == "pausar":
+            if temporizador["pausado"]:
+                return f"{nombre(temporizador)} ya estaba en pausa."
+            parado = self.temporizadores.pausa(temporizador["id"])
+            return (f"En pausa {nombre(parado)}, con "
+                    f"{duracion(parado['restante'])} sin gastar.")
+
+        if accion == "reanudar":
+            if not temporizador["pausado"]:
+                return (f"{nombre(temporizador)} no estaba parado: le "
+                        f"{_quedan(temporizador['restante'])}.")
+            seguido = self.temporizadores.reanuda(temporizador["id"])
+            self._arranca_reloj()
+            return f"Sigue {nombre(seguido)}: le {_quedan(seguido['restante'])}."
+
+        segundos = int(args.get("segundos") or 0)
+        if segundos <= 0:
+            return "¿Cuánto tiempo le quito o le pongo?"
+        cambio = segundos if accion == "anadir" else -segundos
+
+        resultado = self.temporizadores.anade(temporizador["id"], cambio)
+        if not resultado.get("ok"):
+            motivo = resultado.get("motivo", "?")
+            coletilla = " ¿Lo cancelo?" if accion == "quitar" else ""
+            return f"No puedo: {motivo}.{coletilla}"
+
+        ajustado = resultado["temporizador"]
+        self._arranca_reloj()
+        verbo = "Añado" if cambio > 0 else "Quito"
+        estado = ("en pausa con " + duracion(ajustado["restante"])
+                  if ajustado["pausado"]
+                  else "quedan " + duracion(ajustado["restante"]))
+        return (f"{verbo} {duracion(segundos)} {al(nombre(ajustado))}: "
+                f"{estado}.")
+
+    def _resuelve_temporizador(self, cual: str) -> tuple[dict | None, str]:
+        """Cuál de todos. Devuelve el temporizador, o qué hay que preguntar.
+
+        Sin etiqueta y con uno solo en marcha, es ese: pedir que lo nombre
+        cuando no hay confusión posible es ruido.
+        """
+        if not (activos := self.temporizadores.lista()):
+            return None, "No tienes ningún temporizador en marcha."
+
+        if not (cual := (cual or "").strip()):
+            if len(activos) == 1:
+                return activos[0], ""
+            return None, ("Tienes varios, pregúntale a cuál se refiere: "
+                          + _y([describe(t) for t in activos]) + ".")
+
+        if not (encontrados := self.temporizadores.busca(cual)):
+            return None, (f"No tengo ningún temporizador de «{cual}». "
+                          "En marcha hay: " + _y([describe(t) for t in activos])
+                          + ".")
+        if len(encontrados) > 1:
+            return None, ("Hay varios que encajan, pregúntale cuál: "
+                          + _y([describe(t) for t in encontrados]) + ".")
+        return encontrados[0], ""
+
+    # -- el reloj que los hace sonar ---------------------------------------
+    def _arranca_reloj(self) -> None:
+        """Despierta el bucle que los hace sonar, si no estaba ya en marcha."""
+        if self._reloj is None or self._reloj.done():
+            self._reloj = asyncio.create_task(self._tic_tac())
+            self._timers.add(self._reloj)
+            self._reloj.add_done_callback(self._timers.discard)
+
+    async def _tic_tac(self) -> None:
+        """Duerme hasta el próximo que vence y se apaga cuando no queda ninguno.
+
+        Un `sleep` por temporizador sería más corto de escribir, pero pausar o
+        alargar uno obligaría a cancelar su tarea y rehacerla; con un solo
+        bucle que mira el más próximo, pausar es cambiar un número. El tope de
+        un segundo por vuelta es lo que hace que un cambio a mitad de cuenta se
+        note enseguida sin tener que despertar a nadie.
+        """
+        while True:
+            for temporizador in self.temporizadores.vencidos():
+                await self._suena(temporizador)
+            if (espera := self.temporizadores.proximo()) is None:
+                return  # No queda ninguno; el próximo `pon` vuelve a arrancarlo.
+            await asyncio.sleep(min(max(espera, 0.0), 1.0))
+
+    async def _suena(self, temporizador: dict) -> None:
+        # Sin etiqueta se dice «el temporizador» y no «el de diez minutos»:
+        # si no lo nombró, es que no había otro con el que confundirlo.
+        mensaje = f"Ha terminado {temporizador['etiqueta'] or 'el temporizador'}."
+        self.bus.emit("timer", message=mensaje)
+        if self.on_announce is not None:
+            await self.on_announce(mensaje)
+        if self.avisar_temporizadores and self.avisos.disponible:
+            # Fuera de casa, el altavoz no vale: que suene el bolsillo.
+            await asyncio.to_thread(self.avisos.envia, mensaje, "Temporizador")
 
     def _tool_avisar_al_movil(self, args: dict) -> str:
         mensaje = (args.get("mensaje") or "").strip()
