@@ -72,6 +72,7 @@ class Jarvis:
         self._spawn(self._speech_worker())
         for source in self.sources:
             self._spawn(self._sync_worker(source))
+        self._spawn(self._reminder_worker())
         try:
             self.capture = AudioCapture(
                 loop=asyncio.get_running_loop(),
@@ -263,6 +264,22 @@ class Jarvis:
         await self._speech_queue.put(message)
 
     # -- ingesta en segundo plano ------------------------------------------
+    async def _reminder_worker(self) -> None:
+        """Mira cada poco si toca algún recordatorio.
+
+        Se sondea en vez de programar un `sleep` por cada uno porque son
+        absolutos y persistentes: pueden venir de otra ejecución, alguien
+        puede editar el fichero a mano, y dormir hasta pasado mañana se lleva
+        mal con los cambios de hora. Treinta segundos de resolución sobran
+        para algo que se pide al minuto.
+        """
+        while True:
+            try:
+                await self.toolbox.dispara_recordatorios()
+            except Exception:  # noqa: BLE001 - un fallo no puede parar el bucle
+                log.exception("fallo revisando los recordatorios")
+            await asyncio.sleep(30)
+
     async def _sync_worker(self, source) -> None:
         """Sincroniza una fuente cada N minutos, sin tocar la conversación.
 
