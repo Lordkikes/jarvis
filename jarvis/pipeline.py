@@ -73,6 +73,7 @@ class Jarvis:
         for source in self.sources:
             self._spawn(self._sync_worker(source))
         self._spawn(self._reminder_worker())
+        self._spawn(self._alarm_worker())
         try:
             self.capture = AudioCapture(
                 loop=asyncio.get_running_loop(),
@@ -279,6 +280,21 @@ class Jarvis:
             except Exception:  # noqa: BLE001 - un fallo no puede parar el bucle
                 log.exception("fallo revisando los recordatorios")
             await asyncio.sleep(30)
+
+    async def _alarm_worker(self) -> None:
+        """Lo mismo con las alarmas, pero mirando seis veces más a menudo.
+
+        A un recordatorio le sobran treinta segundos de margen; a una alarma
+        no, porque las siete son las siete y no las siete y medio minuto. Y
+        como la insistencia va justo a treinta segundos, sondear a ese mismo
+        ritmo la haría repetirse cada minuto largo en vez de cada medio.
+        """
+        while True:
+            try:
+                await self.toolbox.dispara_alarmas()
+            except Exception:  # noqa: BLE001 - un fallo no puede parar el bucle
+                log.exception("fallo revisando las alarmas")
+            await asyncio.sleep(5)
 
     async def _sync_worker(self, source) -> None:
         """Sincroniza una fuente cada N minutos, sin tocar la conversación.

@@ -141,6 +141,7 @@
     .on("barge_in", () => { addTurn("system", "Te he cedido la palabra"); turn = null; })
     .on("interrupted", () => { turn = null; })
     .on("timer", (e) => addTurn("system", e.message))
+    .on("alarma", (e) => addTurn("system", e.message))
     .on("log", (e) => addTurn("system", e.message))
     .on("muted", (e) => {
       const button = $("btn-mute");

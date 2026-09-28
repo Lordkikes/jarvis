@@ -239,6 +239,7 @@
     .on("barge_in", () => { addEntry("system", "PALABRA CEDIDA AL OPERADOR"); entry = null; })
     .on("interrupted", () => { entry = null; })
     .on("timer", (e) => addEntry("system", "⏱ " + e.message))
+    .on("alarma", (e) => addEntry("system", "⏰ " + e.message))
     .on("log", (e) => addEntry("system", e.message))
     .on("muted", (e) => $("btn-mute").setAttribute("aria-pressed", String(e.value)))
     .on("cleared", () => { log.innerHTML = ""; count = 0; $("log-count").textContent = "0"; })

@@ -155,6 +155,7 @@ tools:
   lists_file: data/lists.json
   scenes_file: data/scenes.json
   reminders_file: data/reminders.json
+  alarms_file: data/alarms.json
 
   # Para la música del propio equipo (Spotify, VLC, el navegador…) hace falta
   # `playerctl`, que está en los repositorios de cualquier distribución. Si no
@@ -163,6 +164,10 @@ tools:
     # Cuando vence un temporizador, además de decirlo por el altavoz. Sirve
     # justo para cuando no estás delante, que es cuando el altavoz no vale.
     temporizadores: true
+    # Igual con las alarmas, pero solo la primera vuelta: una alarma insiste
+    # diez veces en voz alta y diez avisos en el bolsillo molestan más de lo
+    # que despiertan.
+    alarmas: true
     ntfy:
       servidor: https://ntfy.sh   # o el tuyo, si lo alojas
       topico: ""                  # elige uno difícil de adivinar: quien lo
@@ -170,6 +175,10 @@ tools:
     home_assistant:
       servicio: ""                # notify.mobile_app_loquesea; vacío = el
                                   # primero de la app de móvil que encuentre
+
+  alarmas:
+    # Los nueve minutos de los radiodespertadores de toda la vida.
+    posponer_minutos: 9
 
   playerctl: playerctl
 
